@@ -1,0 +1,28 @@
+package hash
+
+import "testing"
+
+func TestDefaultHash(t *testing.T) {
+	testCases := []struct {
+		key  string
+		hash uint32
+	}{
+		{"", 0},
+		{"A", 65},
+		{"AA", 2210},
+		{"AAA", 72995},
+		{"AAAA", 2408900},
+		{"AAAAA", 79493765},
+		{"AAAAAA", 2623294310},
+		{"AAAAAAA", 669366375},
+		{"AAAAAAAA", 614253960},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.key, func(t *testing.T) {
+			x := defaultHash([]byte(tc.key))
+			if x != tc.hash {
+				t.Errorf("got %v, want %v", x, tc.hash)
+			}
+		})
+	}
+}
