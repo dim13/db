@@ -40,12 +40,12 @@ type DBT struct {
 
 type DB interface {
 	Close() error
-	Del(key *DBT, flags uint) error
+	Del(key []byte, flags uint) error
 	Fd() uintptr
-	Get(key, data *DBT, flags uint) error
-	Put(key, data *DBT, flags uint) error
+	Get(key []byte, flags uint) ([]byte, error)
+	Put(key, data []byte, flags uint) error
 	Sync(flags uint) error
-	Seq(key, data *DBT, flags uint) error
+	Seq(key []byte, flags uint) ([]byte, error)
 }
 
 func OpenFile(name string, flags, mode int, typ DBType, openinfo interface{}) (DB, error) {
