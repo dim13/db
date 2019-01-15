@@ -26,3 +26,10 @@ func TestDefaultHash(t *testing.T) {
 		})
 	}
 }
+
+func BenchmarkDefaultHash(b *testing.B) {
+	key := []byte("THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG")
+	for i := 0; i < b.N; i++ {
+		defaultHash(key)
+	}
+}
