@@ -1,3 +1,4 @@
+// Package db implements Berkeley DB 1.85
 package db
 
 import "errors"
