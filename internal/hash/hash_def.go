@@ -76,8 +76,3 @@ type HashHdr struct {
 	Spares    [nCached]int32  // spare pages for overflow
 	Bitmaps   [nCached]uint16 // address of overflow page bitmaps
 }
-
-const (
-	hashMagic   = 0x061561
-	hashVersion = 2
-)
