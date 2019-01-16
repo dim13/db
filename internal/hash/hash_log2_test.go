@@ -7,7 +7,7 @@ import (
 
 func TestLog2(t *testing.T) {
 	testCases := []struct {
-		n, res uint32
+		num, want uint32
 	}{
 		{0, 0},
 		{1, 0},
@@ -21,10 +21,10 @@ func TestLog2(t *testing.T) {
 		{1024, 10},
 	}
 	for _, tc := range testCases {
-		t.Run(fmt.Sprintf("log2(%v)=%v", tc.n, tc.res), func(t *testing.T) {
-			res := log2(tc.n)
-			if res != tc.res {
-				t.Errorf("got %v; want %v", res, tc.res)
+		t.Run(fmt.Sprintf("log2(%v)=%v", tc.num, tc.want), func(t *testing.T) {
+			got := log2(tc.num)
+			if got != tc.want {
+				t.Errorf("got %v, want %v", got, tc.want)
 			}
 		})
 	}

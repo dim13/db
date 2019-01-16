@@ -5,7 +5,7 @@ import "testing"
 func TestDefaultHash(t *testing.T) {
 	testCases := []struct {
 		key  string
-		hash uint32
+		want uint32
 	}{
 		{"", 0},
 		{"A", 65},
@@ -20,9 +20,9 @@ func TestDefaultHash(t *testing.T) {
 	}
 	for _, tc := range testCases {
 		t.Run(tc.key, func(t *testing.T) {
-			x := defaultHash([]byte(tc.key))
-			if x != tc.hash {
-				t.Errorf("got %v, want %v", x, tc.hash)
+			got := defaultHash([]byte(tc.key))
+			if got != tc.want {
+				t.Errorf("got %v, want %v", got, tc.want)
 			}
 		})
 	}
