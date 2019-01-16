@@ -16,6 +16,7 @@ func TestDefaultHash(t *testing.T) {
 		{"AAAAAA", 2623294310},
 		{"AAAAAAA", 669366375},
 		{"AAAAAAAA", 614253960},
+		{"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", 3607767976},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.key, func(t *testing.T) {
@@ -29,7 +30,7 @@ func TestDefaultHash(t *testing.T) {
 
 func BenchmarkDefaultHash(b *testing.B) {
 	benchCases := []string{
-		"A",
+		"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
 		"THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG",
 	}
 	for _, bc := range benchCases {
