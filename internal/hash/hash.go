@@ -9,10 +9,14 @@ const (
 
 type Hash struct {
 	file *os.File
+	hash func([]byte) uint32
 }
 
 func New(file *os.File) *Hash {
-	return &Hash{file: file}
+	return &Hash{
+		file: file,
+		hash: defaultHash,
+	}
 }
 
 func (h *Hash) Close() error {
