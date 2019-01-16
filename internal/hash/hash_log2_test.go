@@ -31,7 +31,12 @@ func TestLog2(t *testing.T) {
 }
 
 func BenchmarkLog2(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		log2(1024)
+	benchCases := []uint32{1, 1024}
+	for _, bc := range benchCases {
+		b.Run(fmt.Sprintf("log(%v)", bc), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				log2(1024)
+			}
+		})
 	}
 }

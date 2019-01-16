@@ -28,8 +28,16 @@ func TestDefaultHash(t *testing.T) {
 }
 
 func BenchmarkDefaultHash(b *testing.B) {
-	key := []byte("THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG")
-	for i := 0; i < b.N; i++ {
-		defaultHash(key)
+	benchCases := []string{
+		"A",
+		"THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG",
+	}
+	for _, bc := range benchCases {
+		b.Run(bc, func(b *testing.B) {
+			key := []byte(bc)
+			for i := 0; i < b.N; i++ {
+				defaultHash(key)
+			}
+		})
 	}
 }
