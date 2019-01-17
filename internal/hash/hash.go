@@ -8,14 +8,18 @@ const (
 )
 
 type Hash struct {
-	file *os.File
-	hash func([]byte) uint32
+	file      *os.File
+	BSize     uint                // hash table bucket size
+	FFactor   uint                // desired density within the hash table
+	CacheSize uint                // suggested maximum size in bytes
+	LOrder    uint                // byte order for integers in metadata
+	Hash      func([]byte) uint32 // user defined hash function
 }
 
 func New(file *os.File) *Hash {
 	return &Hash{
 		file: file,
-		hash: defaultHash,
+		Hash: defaultHash,
 	}
 }
 
