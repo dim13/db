@@ -12,12 +12,23 @@ func TestLog2(t *testing.T) {
 		{0, 0},
 		{1, 0},
 		{2, 1},
-		{3, 2},
+		{3, 1},
 		{4, 2},
+		{7, 2},
 		{8, 3},
-		{9, 4},
+		{15, 3},
+		{16, 4},
+		{31, 4},
+		{32, 5},
+		{63, 5},
+		{64, 6},
+		{127, 6},
 		{128, 7},
-		{129, 8},
+		{255, 7},
+		{256, 8},
+		{511, 8},
+		{512, 9},
+		{1023, 9},
 		{1024, 10},
 	}
 	for _, tc := range testCases {
@@ -35,7 +46,7 @@ func BenchmarkLog2(b *testing.B) {
 	for _, bc := range benchCases {
 		b.Run(fmt.Sprintf("log(%v)", bc), func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
-				log2(1024)
+				log2(bc)
 			}
 		})
 	}
