@@ -1,3 +1,4 @@
+// Package btree implements BTree type of Berkeley DB 1.85
 package btree
 
 import (

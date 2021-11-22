@@ -1,3 +1,4 @@
+// Package hash implements Hash type of Berkeley DB 1.85
 package hash
 
 import (

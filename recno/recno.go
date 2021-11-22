@@ -1,3 +1,4 @@
+// Package recno implements RecNo type of Berkeley DB 1.85
 package recno
 
 import (
