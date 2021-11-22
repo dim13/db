@@ -1,10 +1,14 @@
 package hash
 
-import "os"
+import (
+	"os"
+
+	"dim13.org/db"
+)
 
 const (
-	Magic   = 0x061561
-	Version = 2
+	magic   = 0x061561
+	version = 2
 )
 
 type Hash struct {
@@ -16,37 +20,37 @@ type Hash struct {
 	Hash      func([]byte) uint32 // user defined hash function
 }
 
-func New(file *os.File) *Hash {
+func New(file *os.File) db.DB {
 	return &Hash{
 		file: file,
 		Hash: defaultHash,
 	}
 }
 
-func (h *Hash) Close() error {
+func (h *Hash) Close() (err error) {
 	return h.file.Close()
 }
 
-func (h *Hash) Del(key []byte, flags uint) error {
-	panic("not implemented")
+func (h *Hash) Del(key []byte, flag uint) (err error) {
+	panic("not implemented") // TODO: Implement
 }
 
-func (h *Hash) Fd() uintptr {
+func (h *Hash) Fd() (fd uintptr) {
 	return h.file.Fd()
 }
 
-func (h *Hash) Get(key []byte, flags uint) ([]byte, error) {
-	panic("not implemented")
+func (h *Hash) Get(key []byte, flag uint) (data []byte, err error) {
+	panic("not implemented") // TODO: Implement
 }
 
-func (h *Hash) Put(key []byte, data []byte, flags uint) error {
-	panic("not implemented")
+func (h *Hash) Put(key []byte, data []byte, flag uint) (err error) {
+	panic("not implemented") // TODO: Implement
 }
 
-func (h *Hash) Sync(flags uint) error {
-	panic("not implemented")
+func (h *Hash) Sync(flag uint) (err error) {
+	panic("not implemented") // TODO: Implement
 }
 
-func (h *Hash) Seq(key []byte, flags uint) ([]byte, error) {
-	panic("not implemented")
+func (h *Hash) Seq(flag uint) (key []byte, data []byte, err error) {
+	panic("not implemented") // TODO: Implement
 }

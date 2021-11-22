@@ -1,39 +1,43 @@
 package recno
 
-import "os"
+import (
+	"os"
+
+	"dim13.org/db"
+)
 
 type RecNo struct {
 	file *os.File
 }
 
-func New(file *os.File) *RecNo {
+func New(file *os.File) db.DB {
 	return &RecNo{file: file}
 }
 
-func (r *RecNo) Close() error {
+func (r *RecNo) Close() (err error) {
 	return r.file.Close()
 }
 
-func (r *RecNo) Del(key []byte, flags uint) error {
-	panic("not implemented")
+func (r *RecNo) Del(key []byte, flag uint) (err error) {
+	panic("not implemented") // TODO: Implement
 }
 
-func (r *RecNo) Fd() uintptr {
+func (r *RecNo) Fd() (fd uintptr) {
 	return r.file.Fd()
 }
 
-func (r *RecNo) Get(key []byte, flags uint) ([]byte, error) {
-	panic("not implemented")
+func (r *RecNo) Get(key []byte, flag uint) (data []byte, err error) {
+	panic("not implemented") // TODO: Implement
 }
 
-func (r *RecNo) Put(key []byte, data []byte, flags uint) error {
-	panic("not implemented")
+func (r *RecNo) Put(key []byte, data []byte, flag uint) (err error) {
+	panic("not implemented") // TODO: Implement
 }
 
-func (r *RecNo) Sync(flags uint) error {
-	panic("not implemented")
+func (r *RecNo) Sync(flag uint) (err error) {
+	panic("not implemented") // TODO: Implement
 }
 
-func (r *RecNo) Seq(key []byte, flags uint) ([]byte, error) {
-	panic("not implemented")
+func (r *RecNo) Seq(flag uint) (key []byte, data []byte, err error) {
+	panic("not implemented") // TODO: Implement
 }

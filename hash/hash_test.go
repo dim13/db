@@ -16,11 +16,11 @@ func TestOpen(t *testing.T) {
 	if err := binary.Read(fd, binary.BigEndian, &hdr); err != nil {
 		t.Fatal(err)
 	}
-	if hdr.Magic != Magic {
-		t.Errorf("got %x, want %x", hdr.Magic, Magic)
+	if hdr.Magic != magic {
+		t.Errorf("got %x, want %x", hdr.Magic, magic)
 	}
-	if hdr.Version != Version {
-		t.Errorf("got %x, want %x", hdr.Version, Version)
+	if hdr.Version != version {
+		t.Errorf("got %x, want %x", hdr.Version, version)
 	}
 	t.Logf("%+v", hdr)
 }
