@@ -8,14 +8,6 @@ var (
 	ErrInval = errors.New("parameter is incompatible with the current file specification")
 )
 
-type DBType int
-
-const (
-	DBBTree DBType = iota
-	DBHash
-	DBRecno
-)
-
 type Flag int
 
 // Routine flags
@@ -33,22 +25,12 @@ const (
 	RRecnoSync                   // sync (recno)
 )
 
-// DBT is mnemonic for "data base thang"
-type DBT struct {
-	Data interface{}
-	Size int64
-}
-
 type DB interface {
-	Close() error
-	Del(key []byte, flags uint) error
-	Fd() uintptr
-	Get(key []byte, flags uint) ([]byte, error)
-	Put(key, data []byte, flags uint) error
-	Sync(flags uint) error
-	Seq(key []byte, flags uint) ([]byte, error)
-}
-
-func OpenFile(name string, flags, mode int, typ DBType, openinfo interface{}) (DB, error) {
-	return nil, nil
+	Close() (err error)
+	Del(key []byte, flag uint) (err error)
+	Fd() (fd uintptr)
+	Get(key []byte, flag uint) (data []byte, err error)
+	Put(key []byte, data []byte, flag uint) (err error)
+	Sync(flag uint) (err error)
+	Seq(flag uint) (key []byte, data []byte, err error)
 }
