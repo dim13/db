@@ -1,15 +1,11 @@
 package hash
 
-var tab32 = [32]uint32{
-	0, 9, 1, 10, 13, 21, 2, 29, 11, 14, 16, 18, 22, 25, 3, 30,
-	8, 12, 20, 28, 15, 17, 24, 7, 19, 27, 23, 6, 26, 5, 4, 31,
-}
+import "math/bits"
 
-func log2(value uint32) uint32 {
-	value |= value >> 1
-	value |= value >> 2
-	value |= value >> 4
-	value |= value >> 8
-	value |= value >> 16
-	return tab32[(value*0x07c4acdd)>>27]
+// log2 returns ceiling of log2(num), as __log2 in C
+func log2(num uint32) uint32 {
+	if num == 0 {
+		return 0
+	}
+	return uint32(bits.Len32(num - 1))
 }

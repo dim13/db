@@ -1,3 +1,3 @@
-module dim13.org/db
+module github.com/dim13/db
 
-go 1.17
+go 1.27

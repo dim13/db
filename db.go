@@ -1,6 +1,8 @@
 // Package db implements Berkeley DB 1.85
 package db
 
+import "errors"
+
 // Routine flags
 const (
 	RCursor      = iota + 1 // del, put, seq
@@ -16,6 +18,19 @@ const (
 	RRecnoSync              // sync (recno)
 )
 
+// Byte orders for LOrder fields
+const (
+	LittleEndian = 1234
+	BigEndian    = 4321
+)
+
+var (
+	ErrNotFound = errors.New("not found")      // key not found or no more keys
+	ErrKeyExist = errors.New("key exists")     // put with RNoOverwrite
+	ErrInvalid  = errors.New("invalid")        // bad argument
+	ErrFormat   = errors.New("invalid format") // not a database file
+)
+
 type DB interface {
 	Close() (err error)
 	Del(key []byte, flag uint) (err error)
@@ -23,5 +38,5 @@ type DB interface {
 	Get(key []byte, flag uint) (data []byte, err error)
 	Put(key []byte, data []byte, flag uint) (err error)
 	Sync(flag uint) (err error)
-	Seq(flag uint) (key []byte, data []byte, err error)
+	Seq(key []byte, flag uint) (rkey []byte, data []byte, err error)
 }

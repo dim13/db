@@ -36,7 +36,7 @@ func BenchmarkDefaultHash(b *testing.B) {
 	for _, bc := range benchCases {
 		b.Run(bc, func(b *testing.B) {
 			key := []byte(bc)
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				defaultHash(key)
 			}
 		})
