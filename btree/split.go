@@ -172,14 +172,15 @@ func (t *DB) bpage(h page, skip *int, ilen int) (tp, l, r page, err error) {
 
 	// Split right.  Since the left page can't change, we have to swap
 	// the original and the allocated left page after the split.
-	if tp, err = t.psplit(h, l, r, skip, ilen); err != nil {
+	left, err := t.psplit(h, l, r, skip, ilen)
+	if err != nil {
 		return tp, l, r, err
 	}
 	copy(h.b, l.b)
-	if &tp.b[0] == &l.b[0] {
-		tp = h
+	if left {
+		return h, h, r, nil
 	}
-	return tp, h, r, nil
+	return r, h, r, nil
 }
 
 // root splits the root page of a btree
@@ -193,8 +194,11 @@ func (t *DB) root(h page, skip *int, ilen int) (tp, l, r page, err error) {
 	}
 	l.init(lnpg, pInvalid, rnpg, h.flags()&pType, t.psize)
 	r.init(rnpg, lnpg, pInvalid, h.flags()&pType, t.psize)
-	tp, err = t.psplit(h, l, r, skip, ilen)
-	return tp, l, r, err
+	left, err := t.psplit(h, l, r, skip, ilen)
+	if left {
+		return l, l, r, err
+	}
+	return r, l, r, err
 }
 
 // broot fixes up the btree root page after it has been split
@@ -236,8 +240,9 @@ func (t *DB) broot(h, l, r page) error {
 	return nil
 }
 
-// psplit does the real work of splitting the page
-func (t *DB) psplit(h, l, r page, pskip *int, ilen int) (page, error) {
+// psplit does the real work of splitting the page, reporting whether the
+// open slot ended up on the left page
+func (t *DB) psplit(h, l, r page, pskip *int, ilen int) (left bool, err error) {
 	// Split the data to the left and right pages.  Leave the skip index
 	// open.  Additionally, make some effort not to split on an overflow
 	// key.  This makes internal page processing faster and can save
@@ -268,7 +273,7 @@ func (t *DB) psplit(h, l, r page, pskip *int, ilen int) (page, error) {
 		} else {
 			var err error
 			if src, err = h.item(nxt); err != nil {
-				return page{}, err
+				return false, err
 			}
 			nbytes = len(src)
 			isbigkey = h.isBigKey(nxt)
@@ -323,12 +328,9 @@ func (t *DB) psplit(h, l, r page, pskip *int, ilen int) (page, error) {
 	// If the skipped index was on the left page, just return that page.
 	// Otherwise, adjust the skip index to reflect the new position on
 	// the right page.
-	var rval page
-	if skip <= off {
+	if left = skip <= off; left {
 		skip = 0
-		rval = l
 	} else {
-		rval = r
 		*pskip -= nxt
 	}
 
@@ -339,7 +341,7 @@ func (t *DB) psplit(h, l, r page, pskip *int, ilen int) (page, error) {
 		}
 		src, err := h.item(nxt)
 		if err != nil {
-			return page{}, err
+			return false, err
 		}
 		r.appendItem(off, src)
 		nxt++
@@ -349,7 +351,7 @@ func (t *DB) psplit(h, l, r page, pskip *int, ilen int) (page, error) {
 	if skip == top {
 		r.setLower(r.lower() + 2)
 	}
-	return rval, nil
+	return left, nil
 }
 
 func (p page) isBigKey(i int) bool {
