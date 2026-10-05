@@ -108,7 +108,7 @@ func Model(t *testing.T, d db.DB, n int, reopen func(db.DB) db.DB) db.DB {
 		}
 		switch r.IntN(4) {
 		case 0, 1:
-			if err := d.Put(key, data, 0); err != nil {
+			if _, err := d.Put(key, data, 0); err != nil {
 				t.Fatalf("op %d put %d: %v", op, i, err)
 			}
 			m[string(key)] = data

@@ -30,7 +30,7 @@ type DB interface {
 	Del(key []byte, flag uint) (err error)
 	Fd() (fd uintptr)
 	Get(key []byte, flag uint) (data []byte, err error)
-	Put(key []byte, data []byte, flag uint) (err error)
+	Put(key []byte, data []byte, flag uint) (rkey []byte, err error)
 	Sync(flag uint) (err error)
 	Seq(key []byte, flag uint) (rkey []byte, data []byte, err error)
 }

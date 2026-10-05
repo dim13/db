@@ -175,15 +175,15 @@ func (r *RecNo) Get(key []byte, flag uint) ([]byte, error) {
 	return t.recData(*e)
 }
 
-// Put adds a record
-func (r *RecNo) Put(key, data []byte, flag uint) error {
+// Put adds a record and returns its record number
+func (r *RecNo) Put(key, data []byte, flag uint) ([]byte, error) {
 	t := r.t
 
 	// If using fixed-length records, and the record is long, return
 	// ErrInvalid.  If it's short, pad it out.
 	if t.flags&rFixLen != 0 && len(data) != t.reclen {
 		if len(data) > t.reclen {
-			return db.ErrInvalid
+			return nil, db.ErrInvalid
 		}
 		data = append(bytes.Clone(data), bytes.Repeat([]byte{t.bval}, t.reclen-len(data))...)
 	}
@@ -192,19 +192,19 @@ func (r *RecNo) Put(key, data []byte, flag uint) error {
 	switch flag {
 	case db.RCursor:
 		if t.cursor.flags&cursInit == 0 {
-			return db.ErrInvalid
+			return nil, db.ErrInvalid
 		}
 		nrec = t.cursor.rcursor
 	case db.RSetCursor, 0, db.RIBefore:
 		n, err := recKey(key)
 		if err != nil || n == 0 {
-			return db.ErrInvalid
+			return nil, db.ErrInvalid
 		}
 		nrec = n
 	case db.RIAfter:
 		n, err := recKey(key)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if nrec = n; nrec == 0 {
 			nrec = 1
@@ -213,14 +213,14 @@ func (r *RecNo) Put(key, data []byte, flag uint) error {
 	case db.RNoOverwrite:
 		n, err := recKey(key)
 		if err != nil || n == 0 {
-			return db.ErrInvalid
+			return nil, db.ErrInvalid
 		}
 		if n <= t.nrecs {
-			return db.ErrKeyExist
+			return nil, db.ErrKeyExist
 		}
 		nrec = n
 	default:
-		return db.ErrInvalid
+		return nil, db.ErrInvalid
 	}
 
 	// Make sure that records up to and including the put record are
@@ -228,7 +228,7 @@ func (r *RecNo) Put(key, data []byte, flag uint) error {
 	if nrec > t.nrecs {
 		if t.flags&(rEOF|rInMem) == 0 {
 			if err := t.irec(nrec); err != nil && err != db.ErrNotFound {
-				return err
+				return nil, err
 			}
 		}
 		if nrec > t.nrecs+1 {
@@ -238,20 +238,25 @@ func (r *RecNo) Put(key, data []byte, flag uint) error {
 			}
 			for nrec > t.nrecs+1 {
 				if err := t.recIput(t.nrecs, empty, 0); err != nil {
-					return err
+					return nil, err
 				}
 			}
 		}
 	}
 
 	if err := t.recIput(nrec-1, data, flag); err != nil {
-		return err
+		return nil, err
 	}
 	if flag == db.RSetCursor {
 		t.cursor.rcursor = nrec
 	}
 	t.flags |= rModified
-	return nil
+	// The record inserted after nrec is nrec+1, as in libc (1.85 returns
+	// nrec).
+	if flag == db.RIAfter {
+		nrec++
+	}
+	return binary.NativeEndian.AppendUint32(nil, nrec), nil
 }
 
 // recIput adds a recno item to the tree

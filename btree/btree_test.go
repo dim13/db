@@ -65,7 +65,7 @@ func TestDup(t *testing.T) {
 	}
 	for i := range 300 {
 		for _, k := range []string{"a", "b", "c"} {
-			if err := d.Put([]byte(k), fmt.Appendf(nil, "%s%03d", k, i), 0); err != nil {
+			if _, err := d.Put([]byte(k), fmt.Appendf(nil, "%s%03d", k, i), 0); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -115,13 +115,13 @@ func TestDup(t *testing.T) {
 func TestNoOverwrite(t *testing.T) {
 	d, _ := New(nil, nil)
 	d.Put([]byte("k"), []byte("v"), 0)
-	if err := d.Put([]byte("k"), []byte("w"), db.RNoOverwrite); err != db.ErrKeyExist {
+	if _, err := d.Put([]byte("k"), []byte("w"), db.RNoOverwrite); err != db.ErrKeyExist {
 		t.Errorf("got %v, want %v", err, db.ErrKeyExist)
 	}
 	if _, v, _ := d.Seq(nil, db.RLast); string(v) != "v" {
 		t.Errorf("got %q", v)
 	}
-	if err := d.Put([]byte("k"), []byte("w"), db.RCursor); err != nil {
+	if _, err := d.Put([]byte("k"), []byte("w"), db.RCursor); err != nil {
 		t.Fatal(err)
 	}
 	if v, _ := d.Get([]byte("k"), 0); string(v) != "w" {
@@ -142,4 +142,12 @@ func TestLibc(t *testing.T) {
 	}
 	defer d.Close()
 	dbtest.Compare(t, dbtest.Dump(t, d, false), dbtest.ReadDump(t, "testdata/btree.txt"))
+}
+
+func TestPutKey(t *testing.T) {
+	d, _ := New(nil, nil)
+	k, err := d.Put([]byte("key"), []byte("value"), 0)
+	if err != nil || string(k) != "key" {
+		t.Errorf("got %q, %v", k, err)
+	}
 }

@@ -61,7 +61,7 @@ func TestModel(t *testing.T) {
 		}
 		switch n := r.IntN(len(m) + 1); r.IntN(5) {
 		case 0, 1: // append
-			if err := d.Put(key(len(m)+1), data, 0); err != nil {
+			if _, err := d.Put(key(len(m)+1), data, 0); err != nil {
 				t.Fatal(op, err)
 			}
 			m = append(m, data)
@@ -69,7 +69,7 @@ func TestModel(t *testing.T) {
 			if n == 0 {
 				continue
 			}
-			if err := d.Put(key(n), data, db.RIBefore); err != nil {
+			if _, err := d.Put(key(n), data, db.RIBefore); err != nil {
 				t.Fatal(op, err)
 			}
 			m = slices.Insert(m, n-1, data)
@@ -77,7 +77,7 @@ func TestModel(t *testing.T) {
 			if n == 0 {
 				continue
 			}
-			if err := d.Put(key(n), data, 0); err != nil {
+			if _, err := d.Put(key(n), data, 0); err != nil {
 				t.Fatal(op, err)
 			}
 			m[n-1] = data
@@ -133,10 +133,10 @@ func TestFixedLen(t *testing.T) {
 	if got := dump(t, d); fmt.Sprintf("%q", got) != `["aaaa" "bbbb" "cc  "]` {
 		t.Errorf("got %q", got)
 	}
-	if err := d.Put(key(5), []byte("e"), 0); err != nil {
+	if _, err := d.Put(key(5), []byte("e"), 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.Put(key(1), []byte("toolong"), 0); err != db.ErrInvalid {
+	if _, err := d.Put(key(1), []byte("toolong"), 0); err != db.ErrInvalid {
 		t.Errorf("got %v, want %v", err, db.ErrInvalid)
 	}
 	d.Close()
@@ -185,4 +185,42 @@ func TestLibc(t *testing.T) {
 	}
 	defer d.Close()
 	dbtest.Compare(t, dbtest.Dump(t, d, true), dbtest.ReadDump(t, "testdata/recno.txt"))
+}
+
+func TestPutKey(t *testing.T) {
+	d, err := New(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 3; i++ {
+		d.Put(key(i), []byte("x"), 0)
+	}
+	testCases := []struct {
+		name string
+		key  int
+		flag uint
+		want int
+	}{
+		{"iafter", 1, db.RIAfter, 2},
+		{"ibefore", 2, db.RIBefore, 2},
+		{"iafter0", 0, db.RIAfter, 1},
+		{"skip", 9, 0, 9},
+		{"setcursor", 4, db.RSetCursor, 4},
+		{"cursor", 0, db.RCursor, 4},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.flag == db.RCursor {
+				// as in C, RSetCursor doesn't initialize the cursor
+				d.Seq(key(tc.want), db.RCursor)
+			}
+			k, err := d.Put(key(tc.key), []byte("y"), tc.flag)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := int(binary.NativeEndian.Uint32(k)), tc.want; got != want {
+				t.Errorf("got %d, want %d", got, want)
+			}
+		})
+	}
 }

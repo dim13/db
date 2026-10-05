@@ -407,18 +407,20 @@ func (h *Hash) Get(key []byte, flag uint) ([]byte, error) {
 	return h.access(actionGet, key, nil)
 }
 
-// Put stores a record
-func (h *Hash) Put(key, data []byte, flag uint) error {
+// Put stores a record and returns its key
+func (h *Hash) Put(key, data []byte, flag uint) ([]byte, error) {
 	act := actionPut
 	switch flag {
 	case 0:
 	case db.RNoOverwrite:
 		act = actionPutNew
 	default:
-		return db.ErrInvalid
+		return nil, db.ErrInvalid
 	}
-	_, err := h.access(act, key, data)
-	return err
+	if _, err := h.access(act, key, data); err != nil {
+		return nil, err
+	}
+	return key, nil
 }
 
 // Del deletes a record

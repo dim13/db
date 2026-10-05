@@ -106,7 +106,7 @@ func TestStress(t *testing.T) {
 			switch r.IntN(4) {
 			case 0, 1:
 				desc = fmt.Sprintf("put %d (%d,%d)", i, len(key), len(data))
-				err = h.Put(key, data, 0)
+				_, err = h.Put(key, data, 0)
 			case 2:
 				desc = fmt.Sprintf("del %d", i)
 				if err = h.Del(key, 0); err == db.ErrNotFound {

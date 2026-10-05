@@ -53,7 +53,7 @@ func TestMk(t *testing.T) {
 				k = binary.NativeEndian.AppendUint32(nil, uint32(i+1))
 				v = v[:len(v)%200]
 			}
-			if err := d.Put(k, v, 0); err != nil {
+			if _, err := d.Put(k, v, 0); err != nil {
 				t.Fatal(name, i, err)
 			}
 		}

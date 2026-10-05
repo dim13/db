@@ -558,8 +558,15 @@ func (t *BTree) Get(key []byte, flag uint) ([]byte, error) {
 	return data, err
 }
 
-// Put adds a btree item to the tree
-func (t *BTree) Put(key, data []byte, flag uint) error {
+// Put adds a btree item to the tree and returns its key
+func (t *BTree) Put(key, data []byte, flag uint) ([]byte, error) {
+	if err := t.put(key, data, flag); err != nil {
+		return nil, err
+	}
+	return key, nil
+}
+
+func (t *BTree) put(key, data []byte, flag uint) error {
 	switch flag {
 	case 0, db.RNoOverwrite:
 	case db.RCursor:

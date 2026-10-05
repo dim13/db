@@ -64,7 +64,7 @@ func TestDupCheck(t *testing.T) {
 	}
 	for i := range 300 {
 		for _, k := range []string{"a", "b", "c"} {
-			if err := tr.Put([]byte(k), fmt.Appendf(nil, "%s%03d", k, i), 0); err != nil {
+			if _, err := tr.Put([]byte(k), fmt.Appendf(nil, "%s%03d", k, i), 0); err != nil {
 				t.Fatal(err)
 			}
 			if err := tr.check(); err != nil {
