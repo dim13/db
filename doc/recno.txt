@@ -58,9 +58,10 @@ Table of Contents
 
    Variable length records
 
-      Records are separated by a delimiter byte (bval), newline (0x0A)
-      if the application gives no parameters at all, otherwise the byte
-      it gives, NUL if left zero.  Every record is followed by the
+      Records are separated by a delimiter byte (bval), by default
+      newline (0x0A).  C uses NUL instead when the application passes
+      parameters leaving bval zero; the Go implementation always
+      defaults to newline.  Every record is followed by the
       delimiter.  A reader MUST also accept a final record without
       delimiter.  An empty file holds no records; a file of a single
       delimiter holds one empty record.
@@ -192,5 +193,5 @@ Table of Contents
       P_RLEAF                   0x10
       P_BIGDATA                 0x01
       RINTERNAL entry size      8
-      default bval              0x0A without parameters, else as given
+      default bval              0x0A (variable), 0x00 (fixed length)
       first record number       1

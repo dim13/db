@@ -237,3 +237,15 @@ func TestReadOnly(t *testing.T) {
 	k := key(1)
 	dbtest.ReadOnly(t, d, k)
 }
+
+func TestZeroInfo(t *testing.T) {
+	for _, info := range []*Info{nil, {}} {
+		name := filepath.Join(t.TempDir(), "test.txt")
+		os.WriteFile(name, []byte("a\nb\n"), 0644)
+		d := open(t, name, info)
+		if got := dump(t, d); fmt.Sprintf("%q", got) != `["a" "b"]` {
+			t.Errorf("info %v: got %q", info, got)
+		}
+		d.Close()
+	}
+}

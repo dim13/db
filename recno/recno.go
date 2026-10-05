@@ -31,14 +31,13 @@ const (
 	sSearch
 )
 
-// Info holds recno open parameters.  As in C, a non-nil Info with zero BVal
-// delimits records by NUL; nil Info delimits by newline.
+// Info holds recno open parameters, the zero value and nil mean defaults
 type Info struct {
 	Flags     uint             // RFixedLen, RNoKey, RSnapshot
 	PSize     int              // page size
 	ByteOrder binary.ByteOrder // byte order, nil for native
 	RecLen    int              // record length (fixed-length records)
-	BVal      byte             // delimiting byte (variable-length records)
+	BVal      byte             // delimiter, newline if zero; pad byte of fixed-length records
 	BTree     *os.File         // btree file, nil for in-memory tree
 	ReadOnly  bool             // refuse changes, never write
 }
@@ -75,7 +74,9 @@ func New(file *os.File, info *Info) (*RecNo, error) {
 			}
 		}
 		t.bval = info.BVal
-	} else {
+	}
+	// Unlike C, where a given info with zero bval delimits by NUL.
+	if t.bval == 0 && t.flags&rFixLen == 0 {
 		t.bval = '\n'
 	}
 
