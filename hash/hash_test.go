@@ -61,7 +61,7 @@ func TestModel(t *testing.T) {
 		{"default", nil},
 		{"bsize256", &Info{BSize: 256}},
 		{"bsize8192", &Info{BSize: 8192, FFactor: 8}},
-		{"littleendian", &Info{BSize: 512, LOrder: binary.LittleEndian}},
+		{"littleendian", &Info{BSize: 512, ByteOrder: binary.LittleEndian}},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {

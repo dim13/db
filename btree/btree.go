@@ -52,7 +52,7 @@ type Info struct {
 	PSize      int                   // page size
 	Compare    func(a, b []byte) int // key comparison function
 	Prefix     func(a, b []byte) int // prefix function
-	LOrder     binary.ByteOrder      // byte order, nil for native
+	ByteOrder  binary.ByteOrder      // byte order, nil for native
 	ReadOnly   bool                  // refuse changes, never write
 }
 
@@ -121,7 +121,7 @@ func New(file *os.File, info *Info) (*BTree, error) {
 			b.Prefix = defPrefix
 		}
 	}
-	o := b.LOrder
+	o := b.ByteOrder
 	if o == nil {
 		o = binary.NativeEndian
 	}

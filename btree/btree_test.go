@@ -31,7 +31,7 @@ func TestModel(t *testing.T) {
 	}{
 		{"default", nil},
 		{"psize512", &Info{PSize: 512}},
-		{"bigendian", &Info{PSize: 1024, LOrder: binary.BigEndian}},
+		{"bigendian", &Info{PSize: 1024, ByteOrder: binary.BigEndian}},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {

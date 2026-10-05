@@ -24,6 +24,7 @@ var (
 	ErrInvalid  = errors.New("invalid")        // bad argument
 	ErrReadOnly = errors.New("read only")      // change to read-only database
 	ErrFormat   = errors.New("invalid format") // not a database file
+	ErrOverflow = errors.New("out of overflow pages, increase page size")
 )
 
 type DB interface {

@@ -1,6 +1,10 @@
 package hash
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+
+	"github.com/dim13/db"
+)
 
 /*
  * routines dealing with a data page
@@ -403,7 +407,7 @@ func (h *Hash) ibitmap(pnum, nbits, ndx int) {
 
 func (h *Hash) fetchBitmap(ndx int) ([]byte, error) {
 	if ndx >= h.nmaps {
-		return nil, errOvfl
+		return nil, db.ErrOverflow
 	}
 	m := make([]byte, h.hdr.BSize)
 	if err := h.getPage(m, int(h.hdr.Bitmaps[ndx]), false, true, true); err != nil {
@@ -478,7 +482,7 @@ func (h *Hash) overflowPage() (int, error) {
 				// 1.85 rejects offset 2047 here, although the
 				// allocation below hands it out.
 				if offset > splitMask {
-					return 0, errOvfl
+					return 0, db.ErrOverflow
 				}
 				return oaddrOf(i, offset), nil
 			}
@@ -494,7 +498,7 @@ func (h *Hash) overflowPage() (int, error) {
 	}
 	if offset > splitMask {
 		if splitnum++; splitnum >= nCached {
-			return 0, errOvfl
+			return 0, db.ErrOverflow
 		}
 		hdr.OvflPoint = int32(splitnum)
 		hdr.Spares[splitnum] = hdr.Spares[splitnum-1]
@@ -505,7 +509,7 @@ func (h *Hash) overflowPage() (int, error) {
 	// Check if we need to allocate a new bitmap page
 	if freeBit == mask {
 		if freePage++; freePage >= nCached {
-			return 0, errOvfl
+			return 0, db.ErrOverflow
 		}
 		// The bitmap is allocated with 1 clear bit: the first
 		// page is the map page itself, the second is the overflow
@@ -515,7 +519,7 @@ func (h *Hash) overflowPage() (int, error) {
 		offset++
 		if offset > splitMask {
 			if splitnum++; splitnum >= nCached {
-				return 0, errOvfl
+				return 0, db.ErrOverflow
 			}
 			hdr.OvflPoint = int32(splitnum)
 			hdr.Spares[splitnum] = hdr.Spares[splitnum-1]
