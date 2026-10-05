@@ -2,7 +2,7 @@ package hash
 
 import "testing"
 
-func TestDefaultHash(t *testing.T) {
+func TestTorek(t *testing.T) {
 	testCases := []struct {
 		key  string
 		want uint32
@@ -20,7 +20,9 @@ func TestDefaultHash(t *testing.T) {
 	}
 	for _, tc := range testCases {
 		t.Run(tc.key, func(t *testing.T) {
-			got := defaultHash([]byte(tc.key))
+			h := newTorek()
+			h.Write([]byte(tc.key))
+			got := h.Sum32()
 			if got != tc.want {
 				t.Errorf("got %v, want %v", got, tc.want)
 			}
@@ -28,7 +30,7 @@ func TestDefaultHash(t *testing.T) {
 	}
 }
 
-func BenchmarkDefaultHash(b *testing.B) {
+func BenchmarkTorek(b *testing.B) {
 	benchCases := []string{
 		"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
 		"THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG",
@@ -36,8 +38,11 @@ func BenchmarkDefaultHash(b *testing.B) {
 	for _, bc := range benchCases {
 		b.Run(bc, func(b *testing.B) {
 			key := []byte(bc)
+			h := newTorek()
 			for b.Loop() {
-				defaultHash(key)
+				h.Reset()
+				h.Write(key)
+				h.Sum32()
 			}
 		})
 	}

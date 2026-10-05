@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"hash"
 	"io"
 	"os"
 
@@ -75,12 +76,12 @@ type header struct {
 
 // Info holds hash open parameters
 type Info struct {
-	BSize     int                 // bucket size
-	FFactor   int                 // fill factor
-	NElem     int                 // number of elements
-	Hash      func([]byte) uint32 // hash function
-	ByteOrder binary.ByteOrder    // byte order, nil for native
-	ReadOnly  bool                // refuse changes, never write
+	BSize     int                // bucket size
+	FFactor   int                // fill factor
+	NElem     int                // number of elements
+	Hash      func() hash.Hash32 // hash function constructor, e.g. fnv.New32a
+	ByteOrder binary.ByteOrder   // byte order, nil for native
+	ReadOnly  bool               // refuse changes, never write
 }
 
 type buf struct {
@@ -95,7 +96,7 @@ type Hash struct {
 	file *os.File
 	o    binary.ByteOrder
 	hdr  header
-	hash func([]byte) uint32
+	hash hash.Hash32
 
 	nsegs    int // number of allocated segments
 	mapp     [nCached][]byte
@@ -124,7 +125,7 @@ const (
 func New(file *os.File, info *Info) (*Hash, error) {
 	h := &Hash{
 		file:    file,
-		hash:    defaultHash,
+		hash:    newTorek(),
 		buckets: make(map[int]*buf),
 		ovfls:   make(map[int]*buf),
 		cbucket: -1,
@@ -149,7 +150,7 @@ func New(file *os.File, info *Info) (*Hash, error) {
 	}
 
 	if info != nil && info.Hash != nil {
-		h.hash = info.Hash
+		h.hash = info.Hash()
 	}
 	if err := binary.Read(io.NewSectionReader(file, 0, hdrSize), binary.BigEndian, &h.hdr); err != nil {
 		return nil, fmt.Errorf("header: %w", db.ErrFormat)
@@ -158,7 +159,7 @@ func New(file *os.File, info *Info) (*Hash, error) {
 	if hdr.Magic != magic || (hdr.Version != version && hdr.Version != oldVersion) {
 		return nil, fmt.Errorf("magic: %w", db.ErrFormat)
 	}
-	if int32(h.hash([]byte(charKey))) != hdr.HCharkey {
+	if int32(h.sum([]byte(charKey))) != hdr.HCharkey {
 		return nil, fmt.Errorf("hash function: %w", db.ErrFormat)
 	}
 	if hdr.BSize <= 0 || hdr.BSize > maxBSize || 1<<hdr.BShift != hdr.BSize ||
@@ -204,7 +205,7 @@ func (h *Hash) initHash(info *Info) error {
 			hdr.FFactor = int32(info.FFactor)
 		}
 		if info.Hash != nil {
-			h.hash = info.Hash
+			h.hash = info.Hash()
 		}
 		if info.NElem != 0 {
 			nelem = info.NElem
@@ -303,7 +304,7 @@ func (h *Hash) flushMeta() error {
 	hdr := &h.hdr
 	hdr.Magic = magic
 	hdr.Version = version
-	hdr.HCharkey = int32(h.hash([]byte(charKey)))
+	hdr.HCharkey = int32(h.sum([]byte(charKey)))
 	w := io.NewOffsetWriter(h.file, 0)
 	if err := binary.Write(w, binary.BigEndian, hdr); err != nil {
 		return err
@@ -392,8 +393,14 @@ func (h *Hash) getBuf(addr int, prev *buf, newpage bool) (*buf, error) {
 	return b, nil
 }
 
+func (h *Hash) sum(key []byte) uint32 {
+	h.hash.Reset()
+	h.hash.Write(key)
+	return h.hash.Sum32()
+}
+
 func (h *Hash) callHash(key []byte) int {
-	n := h.hash(key)
+	n := h.sum(key)
 	bucket := n & uint32(h.hdr.HighMask)
 	if bucket > uint32(h.hdr.MaxBucket) {
 		bucket &= uint32(h.hdr.LowMask)

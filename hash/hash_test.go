@@ -2,6 +2,7 @@ package hash
 
 import (
 	"encoding/binary"
+	"hash/fnv"
 	"os"
 	"path/filepath"
 	"testing"
@@ -61,6 +62,7 @@ func TestModel(t *testing.T) {
 		{"default", nil},
 		{"bsize256", &Info{BSize: 256}},
 		{"bsize8192", &Info{BSize: 8192, FFactor: 8}},
+		{"fnv", &Info{Hash: fnv.New32a}},
 		{"littleendian", &Info{BSize: 512, ByteOrder: binary.LittleEndian}},
 	}
 	for _, tc := range testCases {
@@ -71,7 +73,7 @@ func TestModel(t *testing.T) {
 				if err := d.Close(); err != nil {
 					t.Fatal(err)
 				}
-				return open(t, name, nil)
+				return open(t, name, tc.info)
 			})
 			if err := d.Close(); err != nil {
 				t.Fatal(err)
