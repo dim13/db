@@ -36,11 +36,11 @@ const (
 // Info holds options for New.  Zero fields and a nil Info select defaults.
 type Info struct {
 	Flags     Flag             // RFixedLen, RNoKey, RSnapshot
-	PSize     int              // page size
+	PageSize  int              // of a new btree file, default 4096
 	ByteOrder binary.ByteOrder // byte order, nil for native
-	RecLen    int              // record length (fixed-length records)
-	BVal      byte             // delimiter, newline if zero; pad byte of fixed-length records
-	BTree     *os.File         // btree file, nil for in-memory tree
+	RecordLen int              // length of fixed-length records
+	Delimiter byte             // delimiter, newline if zero; pad byte of fixed-length records
+	BTreeFile *os.File         // btree file, nil for in-memory tree
 	ReadOnly  bool             // refuse changes, never write
 }
 
@@ -60,8 +60,8 @@ func New(file *os.File, info *Info) (*DB, error) {
 		if info.Flags&^(RFixedLen|RNoKey|RSnapshot) != 0 {
 			return nil, db.ErrInvalid
 		}
-		bfile = info.BTree
-		psize, order = info.PSize, info.ByteOrder
+		bfile = info.BTreeFile
+		psize, order = info.PageSize, info.ByteOrder
 	}
 	t, err := openTree(bfile, psize, order)
 	if err != nil {
@@ -71,12 +71,12 @@ func New(file *os.File, info *Info) (*DB, error) {
 	if info != nil {
 		if info.Flags&RFixedLen != 0 {
 			t.flags |= rFixLen
-			t.reclen = info.RecLen
+			t.reclen = info.RecordLen
 			if t.reclen <= 0 {
 				return nil, db.ErrInvalid
 			}
 		}
-		t.bval = info.BVal
+		t.bval = info.Delimiter
 	}
 	// Unlike C, where a given info with zero bval delimits by NUL.
 	if t.bval == 0 && t.flags&rFixLen == 0 {

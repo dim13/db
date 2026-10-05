@@ -129,7 +129,7 @@ func TestModel(t *testing.T) {
 func TestFixedLen(t *testing.T) {
 	name := filepath.Join(t.TempDir(), "test.dat")
 	os.WriteFile(name, []byte("aaaabbbbcc"), 0644)
-	d := open(t, name, &Info{Flags: RFixedLen, RecLen: 4, BVal: ' '})
+	d := open(t, name, &Info{Flags: RFixedLen, RecordLen: 4, Delimiter: ' '})
 	if got := dump(t, d); fmt.Sprintf("%q", got) != `["aaaa" "bbbb" "cc  "]` {
 		t.Errorf("got %q", got)
 	}

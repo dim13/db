@@ -30,8 +30,8 @@ func TestModel(t *testing.T) {
 		info *Info
 	}{
 		{"default", nil},
-		{"psize512", &Info{PSize: 512}},
-		{"bigendian", &Info{PSize: 1024, ByteOrder: binary.BigEndian}},
+		{"psize512", &Info{PageSize: 512}},
+		{"bigendian", &Info{PageSize: 1024, ByteOrder: binary.BigEndian}},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -59,7 +59,7 @@ func TestInMemory(t *testing.T) {
 }
 
 func TestDup(t *testing.T) {
-	d, err := New(nil, &Info{Flags: RDup, PSize: 512})
+	d, err := New(nil, &Info{Flags: RDup, PageSize: 512})
 	if err != nil {
 		t.Fatal(err)
 	}

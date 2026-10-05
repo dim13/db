@@ -23,22 +23,22 @@ func TestMk(t *testing.T) {
 		"hash":  func(f *os.File) (db.DB, error) { return hash.New(f, nil) },
 		"recno": func(f *os.File) (db.DB, error) { return recno.New(f, nil) },
 		"btree512": func(f *os.File) (db.DB, error) {
-			return btree.New(f, &btree.Info{PSize: 512})
+			return btree.New(f, &btree.Info{PageSize: 512})
 		},
 		"btreebe": func(f *os.File) (db.DB, error) {
 			return btree.New(f, &btree.Info{ByteOrder: binary.BigEndian})
 		},
 		"hash256": func(f *os.File) (db.DB, error) {
-			return hash.New(f, &hash.Info{BSize: 256})
+			return hash.New(f, &hash.Info{BucketSize: 256})
 		},
 		"hashbe": func(f *os.File) (db.DB, error) {
 			return hash.New(f, &hash.Info{ByteOrder: binary.BigEndian})
 		},
 		"btree512be": func(f *os.File) (db.DB, error) {
-			return btree.New(f, &btree.Info{PSize: 512, ByteOrder: binary.BigEndian})
+			return btree.New(f, &btree.Info{PageSize: 512, ByteOrder: binary.BigEndian})
 		},
 		"hash256le": func(f *os.File) (db.DB, error) {
-			return hash.New(f, &hash.Info{BSize: 256, ByteOrder: binary.LittleEndian})
+			return hash.New(f, &hash.Info{BucketSize: 256, ByteOrder: binary.LittleEndian})
 		},
 	}
 	for name, fn := range open {

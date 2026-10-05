@@ -87,7 +87,7 @@ func TestStress(t *testing.T) {
 	}
 	every, _ := strconv.Atoi(os.Getenv("EVERY"))
 	from, _ := strconv.Atoi(os.Getenv("FROM"))
-	h, _ := New(nil, &Info{BSize: 256})
+	h, _ := New(nil, &Info{BucketSize: 256})
 	r := rand.New(rand.NewPCG(1, 2))
 	for op := range n {
 		i := r.IntN(n / 2)

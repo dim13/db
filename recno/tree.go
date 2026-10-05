@@ -85,7 +85,7 @@ func validPSize(n int) bool {
 // openTree opens a btree backed by file, or an in-memory tree if file is nil
 func openTree(file *os.File, psize int, o binary.ByteOrder) (*tree, error) {
 	if psize != 0 && !validPSize(psize) {
-		return nil, fmt.Errorf("psize %d: %w", psize, db.ErrInvalid)
+		return nil, fmt.Errorf("page size %d: %w", psize, db.ErrInvalid)
 	}
 	if o == nil {
 		o = binary.NativeEndian

@@ -54,13 +54,13 @@ const (
 
 // Info holds options for New.  Zero fields and a nil Info select defaults.
 type Info struct {
-	Flags      Flag                  // RDup
-	MinKeyPage int                   // minimum keys per page
-	PSize      int                   // page size
-	Compare    func(a, b []byte) int // key comparison function
-	Prefix     func(a, b []byte) int // prefix function
-	ByteOrder  binary.ByteOrder      // byte order, nil for native
-	ReadOnly   bool                  // refuse changes, never write
+	Flags          Flag                  // RDup
+	MinKeysPerPage int                   // default 2, larger keys and data go to overflow pages
+	PageSize       int                   // of a new file, default 4096
+	Compare        func(a, b []byte) int // key comparison function
+	Prefix         func(a, b []byte) int // prefix function
+	ByteOrder      binary.ByteOrder      // byte order, nil for native
+	ReadOnly       bool                  // refuse changes, never write
 }
 
 type epgno struct {
@@ -112,15 +112,15 @@ func New(file *os.File, info *Info) (*DB, error) {
 		if b.Flags&^RDup != 0 {
 			return nil, fmt.Errorf("flags %#x: %w", b.Flags, db.ErrInvalid)
 		}
-		if b.PSize != 0 && !validPSize(b.PSize) {
-			return nil, fmt.Errorf("psize %d: %w", b.PSize, db.ErrInvalid)
+		if b.PageSize != 0 && !validPSize(b.PageSize) {
+			return nil, fmt.Errorf("page size %d: %w", b.PageSize, db.ErrInvalid)
 		}
-		if b.MinKeyPage != 0 && b.MinKeyPage < 2 {
-			return nil, fmt.Errorf("minkeypage %d: %w", b.MinKeyPage, db.ErrInvalid)
+		if b.MinKeysPerPage != 0 && b.MinKeysPerPage < 2 {
+			return nil, fmt.Errorf("min keys per page %d: %w", b.MinKeysPerPage, db.ErrInvalid)
 		}
 	}
-	if b.MinKeyPage == 0 {
-		b.MinKeyPage = defMinKeyPage
+	if b.MinKeysPerPage == 0 {
+		b.MinKeysPerPage = defMinKeyPage
 	}
 	if b.Compare == nil {
 		b.Compare = bytes.Compare
@@ -175,22 +175,22 @@ func New(file *os.File, info *Info) (*DB, error) {
 		if mv.u32(4) != version || !validPSize(psize) || flags&^bNoDups != 0 {
 			return nil, fmt.Errorf("meta: %w", db.ErrFormat)
 		}
-		b.PSize = psize
+		b.PageSize = psize
 		t.flags |= flags
 		t.free = mv.u32(12)
 		t.nrecs = mv.u32(16)
 	} else {
-		if b.PSize == 0 {
-			b.PSize = defPSize
+		if b.PageSize == 0 {
+			b.PageSize = defPSize
 		}
 		if b.Flags&RDup == 0 {
 			t.flags |= bNoDups
 		}
 		t.free = pInvalid
 	}
-	t.psize = b.PSize
+	t.psize = b.PageSize
 
-	t.ovflsize = (t.psize-dataOff)/b.MinKeyPage - (2 + nbleafdbt(0, 0))
+	t.ovflsize = (t.psize-dataOff)/b.MinKeysPerPage - (2 + nbleafdbt(0, 0))
 	if min := nbleafdbt(novflSize, novflSize) + 2; t.ovflsize < min {
 		t.ovflsize = min
 	}

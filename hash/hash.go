@@ -77,12 +77,12 @@ type header struct {
 
 // Info holds options for New.  Zero fields and a nil Info select defaults.
 type Info struct {
-	BSize     int                // bucket size
-	FFactor   int                // fill factor
-	NElem     int                // number of elements
-	Hash      func() hash.Hash32 // hash function constructor, e.g. fnv.New32a
-	ByteOrder binary.ByteOrder   // byte order, nil for native
-	ReadOnly  bool               // refuse changes, never write
+	BucketSize int                // of a new file, rounded up to a power of 2, default 4096
+	FillFactor int                // keys per bucket before the table grows
+	NumElem    int                // expected number of keys, sizes a new table
+	Hash       func() hash.Hash32 // hash function constructor, e.g. fnv.New32a
+	ByteOrder  binary.ByteOrder   // byte order, nil for native
+	ReadOnly   bool               // refuse changes, never write
 }
 
 type buf struct {
@@ -194,22 +194,22 @@ func (h *DB) initHash(info *Info) error {
 	hdr.FFactor = defFFactor
 	h.o = binary.NativeEndian
 	if info != nil {
-		if info.BSize != 0 {
+		if info.BucketSize != 0 {
 			// Round pagesize up to power of 2
-			hdr.BShift = int32(log2(uint32(info.BSize)))
+			hdr.BShift = int32(log2(uint32(info.BucketSize)))
 			hdr.BSize = 1 << hdr.BShift
 			if hdr.BSize > maxBSize {
-				return fmt.Errorf("bsize %d: %w", info.BSize, db.ErrInvalid)
+				return fmt.Errorf("bucket size %d: %w", info.BucketSize, db.ErrInvalid)
 			}
 		}
-		if info.FFactor != 0 {
-			hdr.FFactor = int32(info.FFactor)
+		if info.FillFactor != 0 {
+			hdr.FFactor = int32(info.FillFactor)
 		}
 		if info.Hash != nil {
 			h.hash = info.Hash()
 		}
-		if info.NElem != 0 {
-			nelem = info.NElem
+		if info.NumElem != 0 {
+			nelem = info.NumElem
 		}
 		if info.ByteOrder != nil {
 			h.o = info.ByteOrder
