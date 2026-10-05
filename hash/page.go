@@ -228,7 +228,9 @@ func (h *Hash) uglySplit(obucket int, oldp, newp *buf, copyto, moved int) error 
 			scopyto = bsize
 			moved = 0
 			if lastBfp != nil {
-				h.freeOvflpage(lastBfp)
+				if err := h.freeOvflpage(lastBfp); err != nil {
+					return err
+				}
 			}
 			lastBfp = bufp
 		}
@@ -262,7 +264,9 @@ func (h *Hash) uglySplit(obucket int, oldp, newp *buf, copyto, moved int) error 
 		}
 	}
 	if lastBfp != nil {
-		h.freeOvflpage(lastBfp)
+		if err := h.freeOvflpage(lastBfp); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -541,7 +545,7 @@ func (h *Hash) overflowPage() (int, error) {
 }
 
 // freeOvflpage marks overflow page as free
-func (h *Hash) freeOvflpage(obufp *buf) {
+func (h *Hash) freeOvflpage(obufp *buf) error {
 	hdr := &h.hdr
 	addr := obufp.addr
 	ndx := addr >> splitShift
@@ -555,10 +559,13 @@ func (h *Hash) freeOvflpage(obufp *buf) {
 	shift := int(hdr.BShift) + byteShift
 	freePage := bitAddress >> shift
 	freeBit := bitAddress & (int(hdr.BSize)<<byteShift - 1)
-	if freep, err := h.bitmap(freePage); err == nil {
-		h.clrbit(freep, freeBit)
+	freep, err := h.bitmap(freePage)
+	if err != nil {
+		return err
 	}
+	h.clrbit(freep, freeBit)
 	if h.ovfls[addr] == obufp {
 		delete(h.ovfls, addr)
 	}
+	return nil
 }

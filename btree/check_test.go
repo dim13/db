@@ -1,6 +1,8 @@
 package btree
 
 import (
+	"encoding/binary"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -89,5 +91,16 @@ func TestDupCheck(t *testing.T) {
 	}
 	if err := tr.check(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestItemPageType(t *testing.T) {
+	p := page{
+		b: make([]byte, 512),
+		o: binary.LittleEndian,
+	}
+	p.init(1, pInvalid, pInvalid, pOverflow, 512)
+	if _, err := p.item(0); !errors.Is(err, db.ErrFormat) {
+		t.Errorf("got %v, want %v", err, db.ErrFormat)
 	}
 }

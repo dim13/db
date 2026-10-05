@@ -1,7 +1,10 @@
 // Package db implements Berkeley DB 1.85
 package db
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 // Routine flags
 const (
@@ -25,6 +28,8 @@ var (
 	ErrReadOnly = errors.New("read only")      // change to read-only database
 	ErrFormat   = errors.New("invalid format") // not a database file
 	ErrOverflow = errors.New("out of overflow pages, increase page size")
+	ErrNoPage   = fmt.Errorf("no such page: %w", ErrFormat) // link past end of file
+	ErrPageType = fmt.Errorf("page type: %w", ErrFormat)    // unexpected page type
 )
 
 type DB interface {

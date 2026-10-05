@@ -4,6 +4,7 @@ package btree
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 
@@ -199,7 +200,7 @@ func New(file *os.File, info *Info) (*BTree, error) {
 func (t *BTree) nroot() error {
 	if _, err := t.mp.get(pMeta); err == nil {
 		return nil
-	} else if err != errNoPage {
+	} else if !errors.Is(err, db.ErrNoPage) {
 		return err
 	}
 	t.mp.new() // meta
@@ -306,17 +307,19 @@ func (t *BTree) bfree(h page) {
 }
 
 // bnew gets a new page, preferably from the freelist
-func (t *BTree) bnew() (uint32, page) {
+func (t *BTree) bnew() (uint32, page, error) {
 	if t.free != pInvalid {
-		if h, err := t.get(t.free); err == nil {
-			npg := t.free
-			t.free = h.nextpg()
-			t.mp.dirty(npg)
-			return npg, h
+		h, err := t.get(t.free)
+		if err != nil {
+			return 0, page{}, err
 		}
+		npg := t.free
+		t.free = h.nextpg()
+		t.mp.dirty(npg)
+		return npg, h, nil
 	}
 	npg, b := t.mp.new()
-	return npg, t.page(b)
+	return npg, t.page(b), nil
 }
 
 // ovflGet gets an overflow key/data item
@@ -339,12 +342,15 @@ func (t *BTree) ovflGet(ref []byte) ([]byte, error) {
 }
 
 // ovflPut stores an overflow key/data item and returns its reference
-func (t *BTree) ovflPut(data []byte) []byte {
+func (t *BTree) ovflPut(data []byte) ([]byte, error) {
 	plen := t.psize - dataOff
 	var first uint32
 	var last page
 	for p := data; ; {
-		npg, h := t.bnew()
+		npg, h, err := t.bnew()
+		if err != nil {
+			return nil, err
+		}
 		h.init(npg, pInvalid, pInvalid, pOverflow, 0)
 		h.setLower(0)
 		nb := min(len(p), plen)
@@ -365,7 +371,7 @@ func (t *BTree) ovflPut(data []byte) []byte {
 	ref := make([]byte, novflSize)
 	t.o.PutUint32(ref, first)
 	t.o.PutUint32(ref[4:], uint32(len(data)))
-	return ref
+	return ref, nil
 }
 
 // ovflDelete deletes an overflow chain
@@ -595,17 +601,24 @@ func (t *BTree) put(key, data []byte, flag uint) error {
 	// reference, or big keys end up misplaced.
 	skey := key
 	var dflags byte
+	var err error
 	if len(key)+len(data) > t.ovflsize {
 		if len(key) > t.ovflsize {
-			key = t.ovflPut(key)
+			if key, err = t.ovflPut(key); err != nil {
+				return err
+			}
 			dflags |= pBigKey
 		}
 		if len(key)+len(data) > t.ovflsize {
-			data = t.ovflPut(data)
+			if data, err = t.ovflPut(data); err != nil {
+				return err
+			}
 			dflags |= pBigData
 		}
 		if len(key)+len(data) > t.ovflsize && dflags&pBigKey == 0 {
-			key = t.ovflPut(key)
+			if key, err = t.ovflPut(key); err != nil {
+				return err
+			}
 			dflags |= pBigKey
 		}
 	}

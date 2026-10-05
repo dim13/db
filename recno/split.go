@@ -9,7 +9,9 @@ func (t *tree) split(sp page, data []byte, flags byte, ilen, skip int) error {
 	var h, l, r page
 	var err error
 	if sp.pgno() == pRoot {
-		h, l, r = t.root(sp, &skip, ilen)
+		if h, l, r, err = t.root(sp, &skip, ilen); err != nil {
+			return err
+		}
 	} else if h, l, r, err = t.bpage(sp, &skip, ilen); err != nil {
 		return err
 	}
@@ -52,7 +54,9 @@ func (t *tree) split(sp page, data []byte, flags byte, ilen, skip int) error {
 		if h.upper()-h.lower() < nbytes+2 {
 			sp = h
 			if h.pgno() == pRoot {
-				h, l, r = t.root(h, &skip, nbytes)
+				if h, l, r, err = t.root(h, &skip, nbytes); err != nil {
+					return err
+				}
 			} else if h, l, r, err = t.bpage(h, &skip, nbytes); err != nil {
 				return err
 			}
@@ -101,7 +105,9 @@ func (t *tree) split(sp page, data []byte, flags byte, ilen, skip int) error {
 func (t *tree) bpage(h page, skip *int, ilen int) (tp, l, r page, err error) {
 	// Put the new right page for the split into place.
 	var npg uint32
-	npg, r = t.bnew()
+	if npg, r, err = t.bnew(); err != nil {
+		return tp, l, r, err
+	}
 	r.init(npg, h.pgno(), h.nextpg(), h.flags()&pType, t.psize)
 
 	// If we're splitting the last page on a level because we're appending
@@ -131,7 +137,9 @@ func (t *tree) bpage(h page, skip *int, ilen int) (tp, l, r page, err error) {
 
 	// Split right.  Since the left page can't change, we have to swap
 	// the original and the allocated left page after the split.
-	tp = t.psplit(h, l, r, skip, ilen)
+	if tp, err = t.psplit(h, l, r, skip, ilen); err != nil {
+		return tp, l, r, err
+	}
 	copy(h.b, l.b)
 	if &tp.b[0] == &l.b[0] {
 		tp = h
@@ -140,12 +148,18 @@ func (t *tree) bpage(h page, skip *int, ilen int) (tp, l, r page, err error) {
 }
 
 // root splits the root page of a btree
-func (t *tree) root(h page, skip *int, ilen int) (tp, l, r page) {
-	lnpg, l := t.bnew()
-	rnpg, r := t.bnew()
+func (t *tree) root(h page, skip *int, ilen int) (tp, l, r page, err error) {
+	var lnpg, rnpg uint32
+	if lnpg, l, err = t.bnew(); err != nil {
+		return tp, l, r, err
+	}
+	if rnpg, r, err = t.bnew(); err != nil {
+		return tp, l, r, err
+	}
 	l.init(lnpg, pInvalid, rnpg, h.flags()&pType, t.psize)
 	r.init(rnpg, lnpg, pInvalid, h.flags()&pType, t.psize)
-	return t.psplit(h, l, r, skip, ilen), l, r
+	tp, err = t.psplit(h, l, r, skip, ilen)
+	return tp, l, r, err
 }
 
 // rroot fixes up the recno root page after it has been split
@@ -168,7 +182,7 @@ func (t *tree) rroot(h, l, r page) {
 }
 
 // psplit does the real work of splitting the page
-func (t *tree) psplit(h, l, r page, pskip *int, ilen int) page {
+func (t *tree) psplit(h, l, r page, pskip *int, ilen int) (page, error) {
 	// Split the data to the left and right pages.  Leave the skip index
 	// open.
 	skip := *pskip
@@ -192,7 +206,10 @@ func (t *tree) psplit(h, l, r page, pskip *int, ilen int) page {
 		if skip == off {
 			nbytes = ilen
 		} else {
-			src = h.item(nxt)
+			var err error
+			if src, err = h.item(nxt); err != nil {
+				return page{}, err
+			}
 			nbytes = len(src)
 		}
 
@@ -241,7 +258,11 @@ func (t *tree) psplit(h, l, r page, pskip *int, ilen int) page {
 			off++
 			skip = 0
 		}
-		r.appendItem(off, h.item(nxt))
+		src, err := h.item(nxt)
+		if err != nil {
+			return page{}, err
+		}
+		r.appendItem(off, src)
 		nxt++
 	}
 	r.setLower(r.lower() + off*2)
@@ -249,7 +270,7 @@ func (t *tree) psplit(h, l, r page, pskip *int, ilen int) page {
 	if skip == top {
 		r.setLower(r.lower() + 2)
 	}
-	return rval
+	return rval, nil
 }
 
 // recTotal returns the number of recno entries below a page

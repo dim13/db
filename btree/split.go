@@ -1,5 +1,7 @@
 package btree
 
+import "github.com/dim13/db"
+
 // split splits page sp and inserts key/data with flags at index skip,
 // ilen is the insert length
 func (t *BTree) split(sp page, key, data []byte, flags byte, ilen, skip int) error {
@@ -9,7 +11,9 @@ func (t *BTree) split(sp page, key, data []byte, flags byte, ilen, skip int) err
 	var h, l, r page
 	var err error
 	if sp.pgno() == pRoot {
-		h, l, r = t.root(sp, &skip, ilen)
+		if h, l, r, err = t.root(sp, &skip, ilen); err != nil {
+			return err
+		}
 	} else if h, l, r, err = t.bpage(sp, &skip, ilen); err != nil {
 		return err
 	}
@@ -74,7 +78,7 @@ func (t *BTree) split(sp page, key, data []byte, flags byte, ilen, skip int) err
 				}
 			}
 		default:
-			panic("bad page type")
+			return db.ErrPageType
 		}
 
 		// Split the parent page if necessary or shift the indices.
@@ -82,7 +86,9 @@ func (t *BTree) split(sp page, key, data []byte, flags byte, ilen, skip int) err
 		if h.upper()-h.lower() < nbytes+2 {
 			sp = h
 			if h.pgno() == pRoot {
-				h, l, r = t.root(h, &skip, nbytes)
+				if h, l, r, err = t.root(h, &skip, nbytes); err != nil {
+					return err
+				}
 			} else if h, l, r, err = t.bpage(h, &skip, nbytes); err != nil {
 				return err
 			}
@@ -134,7 +140,9 @@ func (t *BTree) split(sp page, key, data []byte, flags byte, ilen, skip int) err
 func (t *BTree) bpage(h page, skip *int, ilen int) (tp, l, r page, err error) {
 	// Put the new right page for the split into place.
 	var npg uint32
-	npg, r = t.bnew()
+	if npg, r, err = t.bnew(); err != nil {
+		return tp, l, r, err
+	}
 	r.init(npg, h.pgno(), h.nextpg(), h.flags()&pType, t.psize)
 
 	// If we're splitting the last page on a level because we're appending
@@ -164,7 +172,9 @@ func (t *BTree) bpage(h page, skip *int, ilen int) (tp, l, r page, err error) {
 
 	// Split right.  Since the left page can't change, we have to swap
 	// the original and the allocated left page after the split.
-	tp = t.psplit(h, l, r, skip, ilen)
+	if tp, err = t.psplit(h, l, r, skip, ilen); err != nil {
+		return tp, l, r, err
+	}
 	copy(h.b, l.b)
 	if &tp.b[0] == &l.b[0] {
 		tp = h
@@ -173,12 +183,18 @@ func (t *BTree) bpage(h page, skip *int, ilen int) (tp, l, r page, err error) {
 }
 
 // root splits the root page of a btree
-func (t *BTree) root(h page, skip *int, ilen int) (tp, l, r page) {
-	lnpg, l := t.bnew()
-	rnpg, r := t.bnew()
+func (t *BTree) root(h page, skip *int, ilen int) (tp, l, r page, err error) {
+	var lnpg, rnpg uint32
+	if lnpg, l, err = t.bnew(); err != nil {
+		return tp, l, r, err
+	}
+	if rnpg, r, err = t.bnew(); err != nil {
+		return tp, l, r, err
+	}
 	l.init(lnpg, pInvalid, rnpg, h.flags()&pType, t.psize)
 	r.init(rnpg, lnpg, pInvalid, h.flags()&pType, t.psize)
-	return t.psplit(h, l, r, skip, ilen), l, r
+	tp, err = t.psplit(h, l, r, skip, ilen)
+	return tp, l, r, err
 }
 
 // broot fixes up the btree root page after it has been split
@@ -210,7 +226,7 @@ func (t *BTree) broot(h, l, r page) error {
 		h.appendItem(1, bi.raw)
 		h.setBinternalPgno(1, r.pgno())
 	default:
-		panic("bad page type")
+		return db.ErrPageType
 	}
 
 	// There are two keys on the page.
@@ -221,7 +237,7 @@ func (t *BTree) broot(h, l, r page) error {
 }
 
 // psplit does the real work of splitting the page
-func (t *BTree) psplit(h, l, r page, pskip *int, ilen int) page {
+func (t *BTree) psplit(h, l, r page, pskip *int, ilen int) (page, error) {
 	// Split the data to the left and right pages.  Leave the skip index
 	// open.  Additionally, make some effort not to split on an overflow
 	// key.  This makes internal page processing faster and can save
@@ -250,7 +266,10 @@ func (t *BTree) psplit(h, l, r page, pskip *int, ilen int) page {
 		if skip == off {
 			nbytes = ilen
 		} else {
-			src = h.item(nxt)
+			var err error
+			if src, err = h.item(nxt); err != nil {
+				return page{}, err
+			}
 			nbytes = len(src)
 			isbigkey = h.isBigKey(nxt)
 		}
@@ -318,7 +337,11 @@ func (t *BTree) psplit(h, l, r page, pskip *int, ilen int) page {
 			off++
 			skip = 0
 		}
-		r.appendItem(off, h.item(nxt))
+		src, err := h.item(nxt)
+		if err != nil {
+			return page{}, err
+		}
+		r.appendItem(off, src)
 		nxt++
 	}
 	r.setLower(r.lower() + off*2)
@@ -326,7 +349,7 @@ func (t *BTree) psplit(h, l, r page, pskip *int, ilen int) page {
 	if skip == top {
 		r.setLower(r.lower() + 2)
 	}
-	return rval
+	return rval, nil
 }
 
 func (p page) isBigKey(i int) bool {

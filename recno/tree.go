@@ -3,6 +3,7 @@ package recno
 import (
 	"bufio"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 
@@ -148,7 +149,7 @@ func openTree(file *os.File, psize int, o binary.ByteOrder) (*tree, error) {
 func (t *tree) nroot() error {
 	if _, err := t.mp.get(pMeta); err == nil {
 		return nil
-	} else if err != errNoPage {
+	} else if !errors.Is(err, db.ErrNoPage) {
 		return err
 	}
 	t.mp.new() // meta
@@ -239,17 +240,19 @@ func (t *tree) bfree(h page) {
 }
 
 // bnew gets a new page, preferably from the freelist
-func (t *tree) bnew() (uint32, page) {
+func (t *tree) bnew() (uint32, page, error) {
 	if t.free != pInvalid {
-		if h, err := t.get(t.free); err == nil {
-			npg := t.free
-			t.free = h.nextpg()
-			t.mp.dirty(npg)
-			return npg, h
+		h, err := t.get(t.free)
+		if err != nil {
+			return 0, page{}, err
 		}
+		npg := t.free
+		t.free = h.nextpg()
+		t.mp.dirty(npg)
+		return npg, h, nil
 	}
 	npg, b := t.mp.new()
-	return npg, t.page(b)
+	return npg, t.page(b), nil
 }
 
 // ovflGet gets an overflow key/data item
@@ -272,12 +275,15 @@ func (t *tree) ovflGet(ref []byte) ([]byte, error) {
 }
 
 // ovflPut stores an overflow key/data item and returns its reference
-func (t *tree) ovflPut(data []byte) []byte {
+func (t *tree) ovflPut(data []byte) ([]byte, error) {
 	plen := t.psize - dataOff
 	var first uint32
 	var last page
 	for p := data; ; {
-		npg, h := t.bnew()
+		npg, h, err := t.bnew()
+		if err != nil {
+			return nil, err
+		}
 		h.init(npg, pInvalid, pInvalid, pOverflow, 0)
 		h.setLower(0)
 		nb := min(len(p), plen)
@@ -298,7 +304,7 @@ func (t *tree) ovflPut(data []byte) []byte {
 	ref := make([]byte, novflSize)
 	t.o.PutUint32(ref, first)
 	t.o.PutUint32(ref[4:], uint32(len(data)))
-	return ref
+	return ref, nil
 }
 
 // ovflDelete deletes an overflow chain

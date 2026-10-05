@@ -483,10 +483,11 @@ func (h *Hash) access(action int, key, val []byte) ([]byte, error) {
 			ndx, n = 1, bp.at(0)
 			off = bsize
 		default:
-			if ndx, err = h.findBigpair(rbufp, ndx, key); err != nil {
+			var ok bool
+			if ndx, ok, err = h.findBigpair(rbufp, ndx, key); err != nil {
 				return nil, err
 			}
-			if ndx > 0 {
+			if ok {
 				found = true
 				break
 			}

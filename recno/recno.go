@@ -271,7 +271,10 @@ func (t *tree) recIput(nrec uint32, data []byte, flag uint) error {
 	// If the data won't fit on a page, store it on indirect pages.
 	var dflags byte
 	if len(data) > t.ovflsize {
-		data = t.ovflPut(data)
+		var err error
+		if data, err = t.ovflPut(data); err != nil {
+			return err
+		}
 		dflags = pBigData
 	}
 

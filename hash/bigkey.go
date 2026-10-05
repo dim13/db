@@ -107,7 +107,9 @@ func (h *Hash) bigDelete(bufp *buf) error {
 			return err
 		}
 		if lastBfp != nil {
-			h.freeOvflpage(lastBfp)
+			if err := h.freeOvflpage(lastBfp); err != nil {
+				return err
+			}
 		}
 		lastBfp = rbufp
 		bp = h.page(rbufp.page)
@@ -132,36 +134,40 @@ func (h *Hash) bigDelete(bufp *buf) error {
 
 	bufp.mod = true
 	if rbufp != bufp {
-		h.freeOvflpage(rbufp)
+		if err := h.freeOvflpage(rbufp); err != nil {
+			return err
+		}
 	}
 	if lastBfp != nil && lastBfp != rbufp {
-		h.freeOvflpage(lastBfp)
+		if err := h.freeOvflpage(lastBfp); err != nil {
+			return err
+		}
 	}
 	h.hdr.NKeys--
 	return nil
 }
 
-// findBigpair returns ndx if key matches big pair, -2 otherwise
-func (h *Hash) findBigpair(bufp *buf, ndx int, key []byte) (int, error) {
+// findBigpair reports if key matches the big pair at ndx
+func (h *Hash) findBigpair(bufp *buf, ndx int, key []byte) (int, bool, error) {
 	bsize := int(h.hdr.BSize)
 	bp := h.page(bufp.page)
 	var err error
 	n := bsize - bp.at(ndx)
 	for ; n <= len(key) && bp.at(ndx+1) == partialKey; n = bsize - bp.at(ndx) {
 		if !bytes.Equal(bp.b[bp.at(ndx):bp.at(ndx)+n], key[:n]) {
-			return -2, nil
+			return ndx, false, nil
 		}
 		key = key[n:]
 		if bufp, err = h.getBuf(bp.at(ndx+2), bufp, false); err != nil {
-			return 0, err
+			return ndx, false, err
 		}
 		bp = h.page(bufp.page)
 		ndx = 1
 	}
 	if n != len(key) || !bytes.Equal(bp.b[bp.at(ndx):bp.at(ndx)+n], key) {
-		return -2, nil
+		return ndx, false, nil
 	}
-	return ndx, nil
+	return ndx, true, nil
 }
 
 // findLastPage finds the last page of the big pair starting at bufp, and

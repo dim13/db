@@ -69,11 +69,9 @@ func newMpool(file *os.File, psize int, size int64) *mpool {
 	}
 }
 
-var errNoPage = fmt.Errorf("no such page: %w", db.ErrInvalid)
-
 func (m *mpool) get(pgno uint32) ([]byte, error) {
 	if pgno >= m.npages {
-		return nil, errNoPage
+		return nil, db.ErrNoPage
 	}
 	if p, ok := m.pages[pgno]; ok {
 		return p, nil
@@ -290,14 +288,14 @@ func (p page) setBinternalPgno(i int, pgno uint32) {
 }
 
 // item returns raw bytes of item i, whatever page type
-func (p page) item(i int) []byte {
+func (p page) item(i int) ([]byte, error) {
 	switch p.flags() & pType {
 	case pBInternal:
-		return p.binternal(i).raw
+		return p.binternal(i).raw, nil
 	case pBLeaf:
-		return p.bleaf(i).raw
+		return p.bleaf(i).raw, nil
 	}
-	panic("bad page type")
+	return nil, db.ErrPageType
 }
 
 func (p page) writeBLeaf(off int, key, data []byte, flags byte) {
