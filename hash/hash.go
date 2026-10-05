@@ -78,11 +78,12 @@ type header struct {
 
 // Info holds hash open parameters
 type Info struct {
-	BSize   int                 // bucket size
-	FFactor int                 // fill factor
-	NElem   int                 // number of elements
-	Hash    func([]byte) uint32 // hash function
-	LOrder  binary.ByteOrder    // byte order, nil for native
+	BSize    int                 // bucket size
+	FFactor  int                 // fill factor
+	NElem    int                 // number of elements
+	Hash     func([]byte) uint32 // hash function
+	LOrder   binary.ByteOrder    // byte order, nil for native
+	ReadOnly bool                // refuse changes, never write
 }
 
 type buf struct {
@@ -103,6 +104,7 @@ type Hash struct {
 	mapp     [nCached][]byte
 	nmaps    int // initial number of bitmaps
 	modified bool
+	readOnly bool
 
 	// ponytail: unbounded buffer cache, every touched page stays in memory until Close
 	buckets map[int]*buf
@@ -129,6 +131,9 @@ func New(file *os.File, info *Info) (*Hash, error) {
 		buckets: make(map[int]*buf),
 		ovfls:   make(map[int]*buf),
 		cbucket: -1,
+	}
+	if info != nil {
+		h.readOnly = info.ReadOnly
 	}
 	var size int64
 	if file != nil {
@@ -277,7 +282,7 @@ func (h *Hash) Sync(flag uint) error {
 }
 
 func (h *Hash) sync() error {
-	if h.file == nil || !h.modified {
+	if h.file == nil || h.readOnly || !h.modified {
 		return nil
 	}
 	for _, m := range []map[int]*buf{h.buckets, h.ovfls} {
@@ -409,6 +414,9 @@ func (h *Hash) Get(key []byte, flag uint) ([]byte, error) {
 
 // Put stores a record and returns its key
 func (h *Hash) Put(key, data []byte, flag uint) ([]byte, error) {
+	if h.readOnly {
+		return nil, db.ErrReadOnly
+	}
 	act := actionPut
 	switch flag {
 	case 0:
@@ -427,6 +435,9 @@ func (h *Hash) Put(key, data []byte, flag uint) ([]byte, error) {
 func (h *Hash) Del(key []byte, flag uint) error {
 	if flag != 0 && flag != db.RCursor {
 		return db.ErrInvalid
+	}
+	if h.readOnly {
+		return db.ErrReadOnly
 	}
 	_, err := h.access(actionDelete, key, nil)
 	return err

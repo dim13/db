@@ -224,3 +224,16 @@ func TestPutKey(t *testing.T) {
 		})
 	}
 }
+
+func TestReadOnly(t *testing.T) {
+	f, err := os.Open("testdata/recno.db") // O_RDONLY, any write would fail
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := New(f, &Info{ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := key(1)
+	dbtest.ReadOnly(t, d, k)
+}

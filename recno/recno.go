@@ -34,12 +34,13 @@ const (
 // Info holds recno open parameters.  As in C, a non-nil Info with zero BVal
 // delimits records by NUL; nil Info delimits by newline.
 type Info struct {
-	Flags  uint             // RFixedLen, RNoKey, RSnapshot
-	PSize  int              // page size
-	LOrder binary.ByteOrder // byte order, nil for native
-	RecLen int              // record length (fixed-length records)
-	BVal   byte             // delimiting byte (variable-length records)
-	BTree  *os.File         // btree file, nil for in-memory tree
+	Flags    uint             // RFixedLen, RNoKey, RSnapshot
+	PSize    int              // page size
+	LOrder   binary.ByteOrder // byte order, nil for native
+	RecLen   int              // record length (fixed-length records)
+	BVal     byte             // delimiting byte (variable-length records)
+	BTree    *os.File         // btree file, nil for in-memory tree
+	ReadOnly bool             // refuse changes, never write
 }
 
 // RecNo is a record oriented tree
@@ -79,6 +80,9 @@ func New(file *os.File, info *Info) (*RecNo, error) {
 	}
 
 	t.flags |= rRecno
+	if info != nil && info.ReadOnly {
+		t.flags |= bRdOnly
+	}
 	if file == nil {
 		t.flags |= rEOF | rInMem
 	} else {
@@ -178,6 +182,9 @@ func (r *RecNo) Get(key []byte, flag uint) ([]byte, error) {
 // Put adds a record and returns its record number
 func (r *RecNo) Put(key, data []byte, flag uint) ([]byte, error) {
 	t := r.t
+	if t.flags&bRdOnly != 0 {
+		return nil, db.ErrReadOnly
+	}
 
 	// If using fixed-length records, and the record is long, return
 	// ErrInvalid.  If it's short, pad it out.
@@ -315,6 +322,9 @@ func (t *tree) recIput(nrec uint32, data []byte, flag uint) error {
 // Del deletes a record
 func (r *RecNo) Del(key []byte, flag uint) error {
 	t := r.t
+	if t.flags&bRdOnly != 0 {
+		return db.ErrReadOnly
+	}
 	var err error
 	switch flag {
 	case 0:
@@ -519,7 +529,7 @@ func (r *RecNo) Sync(flag uint) error {
 
 func (r *RecNo) syncFile() error {
 	t := r.t
-	if t.flags&(rRdOnly|rInMem) != 0 || t.flags&rModified == 0 {
+	if t.flags&(bRdOnly|rRdOnly|rInMem) != 0 || t.flags&rModified == 0 {
 		return nil
 	}
 	// Read any remaining records into the tree.

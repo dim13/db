@@ -103,3 +103,16 @@ func TestLibc(t *testing.T) {
 	defer d.Close()
 	dbtest.Compare(t, dbtest.Dump(t, d, false), dbtest.Expect(400))
 }
+
+func TestReadOnly(t *testing.T) {
+	f, err := os.Open("testdata/hash.db") // O_RDONLY, any write would fail
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := New(f, &Info{ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	k, _ := dbtest.Gen(1)
+	dbtest.ReadOnly(t, d, k)
+}

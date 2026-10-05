@@ -4,6 +4,9 @@ import "github.com/dim13/db"
 
 // Del deletes the item(s) referenced by a key
 func (t *BTree) Del(key []byte, flag uint) error {
+	if t.flags&bRdOnly != 0 {
+		return db.ErrReadOnly
+	}
 	var err error
 	switch flag {
 	case 0:

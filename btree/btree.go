@@ -27,6 +27,7 @@ const RDup = 0x01
 const (
 	bInMem    = 0x00001 // in-memory tree
 	bModified = 0x00004 // tree modified
+	bRdOnly   = 0x00010 // read-only tree
 	bNoDups   = 0x00020 // no duplicate keys permitted
 )
 
@@ -52,6 +53,7 @@ type Info struct {
 	Compare    func(a, b []byte) int // key comparison function
 	Prefix     func(a, b []byte) int // prefix function
 	LOrder     binary.ByteOrder      // byte order, nil for native
+	ReadOnly   bool                  // refuse changes, never write
 }
 
 type epgno struct {
@@ -130,6 +132,10 @@ func New(file *os.File, info *Info) (*BTree, error) {
 		cmp:   b.Compare,
 		pfx:   b.Prefix,
 		order: orderNot,
+	}
+
+	if b.ReadOnly {
+		t.flags |= bRdOnly
 	}
 
 	var size int64
@@ -260,7 +266,7 @@ func (t *BTree) Sync(flag uint) error {
 }
 
 func (t *BTree) sync() error {
-	if t.flags&bInMem != 0 || t.flags&bModified == 0 {
+	if t.flags&(bInMem|bRdOnly) != 0 || t.flags&bModified == 0 {
 		return nil
 	}
 	// Unlike 1.85, always write meta-data, so the free list and
@@ -567,6 +573,9 @@ func (t *BTree) Put(key, data []byte, flag uint) ([]byte, error) {
 }
 
 func (t *BTree) put(key, data []byte, flag uint) error {
+	if t.flags&bRdOnly != 0 {
+		return db.ErrReadOnly
+	}
 	switch flag {
 	case 0, db.RNoOverwrite:
 	case db.RCursor:

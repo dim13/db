@@ -151,3 +151,16 @@ func TestPutKey(t *testing.T) {
 		t.Errorf("got %q, %v", k, err)
 	}
 }
+
+func TestReadOnly(t *testing.T) {
+	f, err := os.Open("testdata/btree.db") // O_RDONLY, any write would fail
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := New(f, &Info{ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	k, _ := dbtest.Gen(3) // libc misplaced keys 1, 2 next to big key 0
+	dbtest.ReadOnly(t, d, k)
+}

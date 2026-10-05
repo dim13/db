@@ -23,6 +23,7 @@ const (
 const (
 	bInMem    = 0x00001 // in-memory tree
 	bModified = 0x00004 // tree modified
+	bRdOnly   = 0x00010 // read-only tree
 	bNoDups   = 0x00020 // no duplicate keys permitted
 	rRecno    = 0x00080 // record oriented tree
 	rEOF      = 0x00100 // end of input file reached
@@ -199,7 +200,7 @@ func (t *tree) close() error {
 }
 
 func (t *tree) sync() error {
-	if t.flags&bInMem != 0 || t.flags&bModified == 0 {
+	if t.flags&(bInMem|bRdOnly) != 0 || t.flags&bModified == 0 {
 		return nil
 	}
 	// Unlike 1.85, always write meta-data, so the free list and

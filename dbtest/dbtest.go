@@ -170,3 +170,20 @@ func Expect(n int) []string {
 	slices.Sort(lines)
 	return lines
 }
+
+// ReadOnly checks d refuses changes, still reads key, and closes cleanly
+func ReadOnly(t *testing.T, d db.DB, key []byte) {
+	t.Helper()
+	if _, err := d.Put(key, []byte("x"), 0); err != db.ErrReadOnly {
+		t.Errorf("put: got %v, want %v", err, db.ErrReadOnly)
+	}
+	if err := d.Del(key, 0); err != db.ErrReadOnly {
+		t.Errorf("del: got %v, want %v", err, db.ErrReadOnly)
+	}
+	if _, err := d.Get(key, 0); err != nil {
+		t.Errorf("get: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Errorf("close: %v", err)
+	}
+}
