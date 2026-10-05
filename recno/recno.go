@@ -34,12 +34,12 @@ const (
 // Info holds recno open parameters.  As in C, a non-nil Info with zero BVal
 // delimits records by NUL; nil Info delimits by newline.
 type Info struct {
-	Flags  uint     // RFixedLen, RNoKey, RSnapshot
-	PSize  int      // page size
-	LOrder int      // byte order
-	RecLen int      // record length (fixed-length records)
-	BVal   byte     // delimiting byte (variable-length records)
-	BTree  *os.File // btree file, nil for in-memory tree
+	Flags  uint             // RFixedLen, RNoKey, RSnapshot
+	PSize  int              // page size
+	LOrder binary.ByteOrder // byte order, nil for native
+	RecLen int              // record length (fixed-length records)
+	BVal   byte             // delimiting byte (variable-length records)
+	BTree  *os.File         // btree file, nil for in-memory tree
 }
 
 // RecNo is a record oriented tree
@@ -51,7 +51,8 @@ type RecNo struct {
 // if file is nil
 func New(file *os.File, info *Info) (db.DB, error) {
 	var bfile *os.File
-	var psize, lorder int
+	var psize int
+	var lorder binary.ByteOrder
 	if info != nil {
 		if info.Flags&^(RFixedLen|RNoKey|RSnapshot) != 0 {
 			return nil, db.ErrInvalid

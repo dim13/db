@@ -82,7 +82,7 @@ type Info struct {
 	FFactor int                 // fill factor
 	NElem   int                 // number of elements
 	Hash    func([]byte) uint32 // hash function
-	LOrder  int                 // byte order
+	LOrder  binary.ByteOrder    // byte order, nil for native
 }
 
 type buf struct {
@@ -114,20 +114,11 @@ type Hash struct {
 	cndx    int
 }
 
-func byteOrder(lorder int) (binary.ByteOrder, uint32, error) {
-	switch lorder {
-	case 0:
-		if binary.NativeEndian.Uint16([]byte{1, 0}) == 1 {
-			return binary.LittleEndian, db.LittleEndian, nil
-		}
-		return binary.BigEndian, db.BigEndian, nil
-	case db.LittleEndian:
-		return binary.LittleEndian, db.LittleEndian, nil
-	case db.BigEndian:
-		return binary.BigEndian, db.BigEndian, nil
-	}
-	return nil, 0, fmt.Errorf("lorder %d: %w", lorder, db.ErrInvalid)
-}
+// Byte orders as stored in header
+const (
+	littleEndian = 1234
+	bigEndian    = 4321
+)
 
 // New opens a hash table backed by file, or an in-memory table if file is
 // nil.  An empty file is initialized as a new table.
@@ -172,9 +163,13 @@ func New(file *os.File, info *Info) (db.DB, error) {
 		hdr.SSize <= 0 || hdr.OvflPoint < 0 || hdr.OvflPoint >= nCached {
 		return nil, fmt.Errorf("header: %w", db.ErrFormat)
 	}
-	var err error
-	if h.o, _, err = byteOrder(int(hdr.LOrder)); err != nil {
-		return nil, fmt.Errorf("lorder: %w", db.ErrFormat)
+	switch hdr.LOrder {
+	case littleEndian:
+		h.o = binary.LittleEndian
+	case bigEndian:
+		h.o = binary.BigEndian
+	default:
+		return nil, fmt.Errorf("lorder %d: %w", hdr.LOrder, db.ErrFormat)
 	}
 	// Max_Bucket is the maximum bucket number, so the number of buckets
 	// is max_bucket + 1.
@@ -193,7 +188,7 @@ func (h *Hash) initHash(info *Info) error {
 	hdr.SShift = defSegShift
 	hdr.DSize = defDirSize
 	hdr.FFactor = defFFactor
-	lorder := 0
+	h.o = binary.NativeEndian
 	if info != nil {
 		if info.BSize != 0 {
 			// Round pagesize up to power of 2
@@ -212,11 +207,13 @@ func (h *Hash) initHash(info *Info) error {
 		if info.NElem != 0 {
 			nelem = info.NElem
 		}
-		lorder = info.LOrder
+		if info.LOrder != nil {
+			h.o = info.LOrder
+		}
 	}
-	var err error
-	if h.o, hdr.LOrder, err = byteOrder(lorder); err != nil {
-		return err
+	hdr.LOrder = bigEndian
+	if h.o.Uint16([]byte{1, 0}) == 1 {
+		hdr.LOrder = littleEndian
 	}
 	return h.initHtab(nelem)
 }

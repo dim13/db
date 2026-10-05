@@ -18,12 +18,6 @@ const (
 	RRecnoSync              // sync (recno)
 )
 
-// Byte orders for LOrder fields
-const (
-	LittleEndian = 1234
-	BigEndian    = 4321
-)
-
 var (
 	ErrNotFound = errors.New("not found")      // key not found or no more keys
 	ErrKeyExist = errors.New("key exists")     // put with RNoOverwrite

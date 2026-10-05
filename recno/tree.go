@@ -72,33 +72,17 @@ type tree struct {
 	bval   byte
 }
 
-func byteOrder(lorder int) (binary.ByteOrder, error) {
-	switch lorder {
-	case 0:
-		if binary.NativeEndian.Uint16([]byte{1, 0}) == 1 {
-			return binary.LittleEndian, nil
-		}
-		return binary.BigEndian, nil
-	case db.LittleEndian:
-		return binary.LittleEndian, nil
-	case db.BigEndian:
-		return binary.BigEndian, nil
-	}
-	return nil, fmt.Errorf("lorder %d: %w", lorder, db.ErrInvalid)
-}
-
 func validPSize(n int) bool {
 	return n >= minPSize && n <= maxPSize && n&1 == 0
 }
 
 // openTree opens a btree backed by file, or an in-memory tree if file is nil
-func openTree(file *os.File, psize, lorder int) (*tree, error) {
+func openTree(file *os.File, psize int, o binary.ByteOrder) (*tree, error) {
 	if psize != 0 && !validPSize(psize) {
 		return nil, fmt.Errorf("psize %d: %w", psize, db.ErrInvalid)
 	}
-	o, err := byteOrder(lorder)
-	if err != nil {
-		return nil, err
+	if o == nil {
+		o = binary.NativeEndian
 	}
 	t := &tree{
 		o:    o,

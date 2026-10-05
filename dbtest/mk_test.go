@@ -26,19 +26,19 @@ func TestMk(t *testing.T) {
 			return btree.New(f, &btree.Info{PSize: 512})
 		},
 		"btreebe": func(f *os.File) (db.DB, error) {
-			return btree.New(f, &btree.Info{LOrder: db.BigEndian})
+			return btree.New(f, &btree.Info{LOrder: binary.BigEndian})
 		},
 		"hash256": func(f *os.File) (db.DB, error) {
 			return hash.New(f, &hash.Info{BSize: 256})
 		},
 		"hashbe": func(f *os.File) (db.DB, error) {
-			return hash.New(f, &hash.Info{LOrder: db.BigEndian})
+			return hash.New(f, &hash.Info{LOrder: binary.BigEndian})
 		},
 		"btree512be": func(f *os.File) (db.DB, error) {
-			return btree.New(f, &btree.Info{PSize: 512, LOrder: db.BigEndian})
+			return btree.New(f, &btree.Info{PSize: 512, LOrder: binary.BigEndian})
 		},
 		"hash256le": func(f *os.File) (db.DB, error) {
-			return hash.New(f, &hash.Info{BSize: 256, LOrder: db.LittleEndian})
+			return hash.New(f, &hash.Info{BSize: 256, LOrder: binary.LittleEndian})
 		},
 	}
 	for name, fn := range open {

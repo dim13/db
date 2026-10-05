@@ -51,7 +51,7 @@ type Info struct {
 	PSize      int                   // page size
 	Compare    func(a, b []byte) int // key comparison function
 	Prefix     func(a, b []byte) int // prefix function
-	LOrder     int                   // byte order
+	LOrder     binary.ByteOrder      // byte order, nil for native
 }
 
 type epgno struct {
@@ -88,21 +88,6 @@ type BTree struct {
 	pfx      func(a, b []byte) int
 	flags    uint32
 	nrecs    uint32 // meta-data, preserved
-}
-
-func byteOrder(lorder int) (binary.ByteOrder, error) {
-	switch lorder {
-	case 0:
-		if binary.NativeEndian.Uint16([]byte{1, 0}) == 1 {
-			return binary.LittleEndian, nil
-		}
-		return binary.BigEndian, nil
-	case db.LittleEndian:
-		return binary.LittleEndian, nil
-	case db.BigEndian:
-		return binary.BigEndian, nil
-	}
-	return nil, fmt.Errorf("lorder %d: %w", lorder, db.ErrInvalid)
 }
 
 func validPSize(n int) bool {
@@ -142,9 +127,9 @@ func newBTree(file *os.File, info *Info) (*BTree, error) {
 			b.Prefix = defPrefix
 		}
 	}
-	o, err := byteOrder(b.LOrder)
-	if err != nil {
-		return nil, err
+	o := b.LOrder
+	if o == nil {
+		o = binary.NativeEndian
 	}
 
 	t := &BTree{
