@@ -5,7 +5,7 @@ import "github.com/dim13/db"
 // Seq returns the next key/data pair in key order, or ErrNotFound at the
 // end.  RFirst and RLast start at either end, RCursor at the first key not
 // less than key; RNext and RPrev continue the scan.
-func (t *DB) Seq(key []byte, flag uint) ([]byte, []byte, error) {
+func (t *DB) Seq(key []byte, flag db.Flag) ([]byte, []byte, error) {
 	// If scan uninitialized as yet, or starting at a specific record, set
 	// the scan to a specific key.
 	var e epg
@@ -30,7 +30,7 @@ func (t *DB) Seq(key []byte, flag uint) ([]byte, []byte, error) {
 }
 
 // seqset sets the sequential scan to a specific key
-func (t *DB) seqset(key []byte, flag uint) (epg, error) {
+func (t *DB) seqset(key []byte, flag db.Flag) (epg, error) {
 	switch flag {
 	case db.RCursor:
 		// Find the first instance of the key or the smallest key
@@ -73,7 +73,7 @@ func (t *DB) seqset(key []byte, flag uint) (epg, error) {
 }
 
 // seqadv advances the sequential scan
-func (t *DB) seqadv(flag uint) (epg, error) {
+func (t *DB) seqadv(flag db.Flag) (epg, error) {
 	c := &t.cursor
 
 	// The cursor was deleted where there weren't any duplicate records,

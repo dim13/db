@@ -25,7 +25,7 @@ func Example() {
 	v, err := d.Get([]byte("banana"), 0)
 	fmt.Printf("%s %v\n", v, err)
 
-	for flag := uint(db.RFirst); ; flag = db.RNext {
+	for flag := db.RFirst; ; flag = db.RNext {
 		k, v, err := d.Seq(nil, flag)
 		if errors.Is(err, db.ErrNotFound) {
 			break

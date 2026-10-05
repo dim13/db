@@ -16,14 +16,15 @@ import (
 	"github.com/dim13/db"
 )
 
-// Flags for Info.Flags.
-const (
-	RFixedLen = 0x01 // fixed-length records
-	RNoKey    = 0x02 // key not required
-	RSnapshot = 0x04 // snapshot the input
-)
+// Flag is an option of Info.Flags.
+type Flag uint
 
-const rRdOnly = 0x02000 // read-only record source
+// Info flags
+const (
+	RFixedLen Flag = 1 << iota // fixed-length records
+	RNoKey                     // key not required
+	RSnapshot                  // snapshot the input
+)
 
 // Rec_search operations
 const (
@@ -34,7 +35,7 @@ const (
 
 // Info holds options for New.  Zero fields and a nil Info select defaults.
 type Info struct {
-	Flags     uint             // RFixedLen, RNoKey, RSnapshot
+	Flags     Flag             // RFixedLen, RNoKey, RSnapshot
 	PSize     int              // page size
 	ByteOrder binary.ByteOrder // byte order, nil for native
 	RecLen    int              // record length (fixed-length records)
@@ -157,7 +158,7 @@ func (r *DB) Fd() uintptr {
 }
 
 // Get returns the record numbered key, or ErrNotFound.
-func (r *DB) Get(key []byte, flag uint) ([]byte, error) {
+func (r *DB) Get(key []byte, flag db.Flag) ([]byte, error) {
 	t := r.t
 	nrec, err := recKey(key)
 	if err != nil {
@@ -189,7 +190,7 @@ func (r *DB) Get(key []byte, flag uint) ([]byte, error) {
 // before or after record key, RSetCursor also moves the cursor there,
 // RCursor replaces the record at the cursor, and RNoOverwrite returns
 // ErrKeyExist for an existing record.
-func (r *DB) Put(key, data []byte, flag uint) ([]byte, error) {
+func (r *DB) Put(key, data []byte, flag db.Flag) ([]byte, error) {
 	t := r.t
 	if t.flags&bRdOnly != 0 {
 		return nil, db.ErrReadOnly
@@ -276,7 +277,7 @@ func (r *DB) Put(key, data []byte, flag uint) ([]byte, error) {
 }
 
 // recIput adds a recno item to the tree
-func (t *tree) recIput(nrec uint32, data []byte, flag uint) error {
+func (t *tree) recIput(nrec uint32, data []byte, flag db.Flag) error {
 	// If the data won't fit on a page, store it on indirect pages.
 	var dflags byte
 	if len(data) > t.ovflsize {
@@ -333,7 +334,7 @@ func (t *tree) recIput(nrec uint32, data []byte, flag uint) error {
 
 // Del deletes the record numbered key, or with RCursor the record at the
 // cursor, renumbering the records after it.
-func (r *DB) Del(key []byte, flag uint) error {
+func (r *DB) Del(key []byte, flag db.Flag) error {
 	t := r.t
 	if t.flags&bRdOnly != 0 {
 		return db.ErrReadOnly
@@ -470,7 +471,7 @@ func (t *tree) recData(e epg) ([]byte, error) {
 // Seq returns the next record number and record, or ErrNotFound at the
 // end.  RFirst and RLast start at either end, RCursor at record key; RNext
 // and RPrev continue the scan.
-func (r *DB) Seq(key []byte, flag uint) ([]byte, []byte, error) {
+func (r *DB) Seq(key []byte, flag db.Flag) ([]byte, []byte, error) {
 	t := r.t
 	var nrec uint32
 	switch flag {
@@ -529,7 +530,7 @@ func (r *DB) Seq(key []byte, flag uint) ([]byte, []byte, error) {
 
 // Sync writes the records back to the flat file.  With RRecnoSync it
 // syncs only the btree file.
-func (r *DB) Sync(flag uint) error {
+func (r *DB) Sync(flag db.Flag) error {
 	t := r.t
 	if flag == db.RRecnoSync {
 		return t.sync()

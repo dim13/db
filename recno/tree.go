@@ -22,15 +22,20 @@ const (
 
 // Tree flags; bNoDups and rRecno are stored on disk
 const (
-	bInMem    = 0x00001 // in-memory tree
-	bModified = 0x00004 // tree modified
-	bRdOnly   = 0x00010 // read-only tree
-	bNoDups   = 0x00020 // no duplicate keys permitted
-	rRecno    = 0x00080 // record oriented tree
-	rEOF      = 0x00100 // end of input file reached
-	rFixLen   = 0x00200 // fixed length records
-	rInMem    = 0x00800 // in-memory file
-	rModified = 0x01000 // modified file
+	bInMem    = 1 << iota // in-memory tree
+	_                     // B_METADIRTY
+	bModified             // tree modified
+	_                     // B_NEEDSWAP
+	bRdOnly               // read-only tree
+	bNoDups               // no duplicate keys permitted
+	_                     // R_CLOSEFP
+	rRecno                // record oriented tree
+	rEOF                  // end of input file reached
+	rFixLen               // fixed length records
+	_                     // R_MEMMAPPED
+	rInMem                // in-memory file
+	rModified             // modified file
+	rRdOnly               // read-only record source
 
 	saveMeta = bNoDups | rRecno
 )

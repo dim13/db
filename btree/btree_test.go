@@ -97,7 +97,7 @@ func TestDup(t *testing.T) {
 		t.Fatal(err)
 	}
 	counts := map[string]int{}
-	for flag := uint(db.RFirst); ; flag = db.RNext {
+	for flag := db.RFirst; ; flag = db.RNext {
 		k, _, err := d.Seq(nil, flag)
 		if err == db.ErrNotFound {
 			break

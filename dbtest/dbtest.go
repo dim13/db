@@ -43,7 +43,7 @@ func sum(b []byte) uint32 {
 func Dump(t *testing.T, d db.DB, recno bool) []string {
 	t.Helper()
 	var lines []string
-	flag := uint(db.RFirst)
+	flag := db.RFirst
 	for {
 		k, v, err := d.Seq(nil, flag)
 		if err == db.ErrNotFound {
@@ -136,7 +136,7 @@ func Model(t *testing.T, d db.DB, n int, reopen func(db.DB) db.DB) db.DB {
 		}
 	}
 	var seen int
-	flag := uint(db.RFirst)
+	flag := db.RFirst
 	for {
 		k, v, err := d.Seq(nil, flag)
 		if err == db.ErrNotFound {

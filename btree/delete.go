@@ -4,7 +4,7 @@ import "github.com/dim13/db"
 
 // Del deletes all entries with key, or with RCursor the entry at the
 // cursor.
-func (t *DB) Del(key []byte, flag uint) error {
+func (t *DB) Del(key []byte, flag db.Flag) error {
 	if t.flags&bRdOnly != 0 {
 		return db.ErrReadOnly
 	}

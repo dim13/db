@@ -22,23 +22,28 @@ const (
 	defMinKeyPage = 2
 )
 
+// Flag is an option of Info.Flags.
+type Flag uint
+
 // RDup permits duplicate keys.
-const RDup = 0x01
+const RDup Flag = 0x01
 
 // Tree flags; bNoDups is stored on disk
 const (
-	bInMem    = 0x00001 // in-memory tree
-	bModified = 0x00004 // tree modified
-	bRdOnly   = 0x00010 // read-only tree
-	bNoDups   = 0x00020 // no duplicate keys permitted
+	bInMem    = 1 << iota // in-memory tree
+	_                     // B_METADIRTY
+	bModified             // tree modified
+	_                     // B_NEEDSWAP
+	bRdOnly               // read-only tree
+	bNoDups               // no duplicate keys permitted
 )
 
 // Cursor flags
 const (
-	cursAcquire = 0x01 // cursor needs to be reacquired
-	cursAfter   = 0x02 // unreturned cursor after key
-	cursBefore  = 0x04 // unreturned cursor before key
-	cursInit    = 0x08 // cursor initialized
+	cursAcquire = 1 << iota // cursor needs to be reacquired
+	cursAfter               // unreturned cursor after key
+	cursBefore              // unreturned cursor before key
+	cursInit                // cursor initialized
 )
 
 const (
@@ -49,7 +54,7 @@ const (
 
 // Info holds options for New.  Zero fields and a nil Info select defaults.
 type Info struct {
-	Flags      uint                  // RDup
+	Flags      Flag                  // RDup
 	MinKeyPage int                   // minimum keys per page
 	PSize      int                   // page size
 	Compare    func(a, b []byte) int // key comparison function
@@ -261,7 +266,7 @@ func (t *DB) Fd() uintptr {
 }
 
 // Sync writes all changes to disk, flag must be 0.
-func (t *DB) Sync(flag uint) error {
+func (t *DB) Sync(flag db.Flag) error {
 	if flag != 0 {
 		return db.ErrInvalid
 	}
@@ -558,7 +563,7 @@ func (t *DB) sibling(pg uint32, index int, key []byte) (bool, error) {
 
 // Get returns the data stored under key, or ErrNotFound.  With duplicates
 // it returns one of them.
-func (t *DB) Get(key []byte, flag uint) ([]byte, error) {
+func (t *DB) Get(key []byte, flag db.Flag) ([]byte, error) {
 	if flag != 0 {
 		return nil, db.ErrInvalid
 	}
@@ -576,14 +581,14 @@ func (t *DB) Get(key []byte, flag uint) ([]byte, error) {
 // Put stores data under key and returns key.  Without RDup it replaces an
 // existing entry; with RNoOverwrite it returns ErrKeyExist instead; with
 // RCursor it replaces the entry at the cursor.
-func (t *DB) Put(key, data []byte, flag uint) ([]byte, error) {
+func (t *DB) Put(key, data []byte, flag db.Flag) ([]byte, error) {
 	if err := t.put(key, data, flag); err != nil {
 		return nil, err
 	}
 	return key, nil
 }
 
-func (t *DB) put(key, data []byte, flag uint) error {
+func (t *DB) put(key, data []byte, flag db.Flag) error {
 	if t.flags&bRdOnly != 0 {
 		return db.ErrReadOnly
 	}

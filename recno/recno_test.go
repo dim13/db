@@ -34,7 +34,7 @@ func open(t *testing.T, name string, info *Info) db.DB {
 func dump(t *testing.T, d db.DB) [][]byte {
 	t.Helper()
 	var recs [][]byte
-	for flag := uint(db.RFirst); ; flag = db.RNext {
+	for flag := db.RFirst; ; flag = db.RNext {
 		k, v, err := d.Seq(nil, flag)
 		if err == db.ErrNotFound {
 			return recs
@@ -198,7 +198,7 @@ func TestPutKey(t *testing.T) {
 	testCases := []struct {
 		name string
 		key  int
-		flag uint
+		flag db.Flag
 		want int
 	}{
 		{"iafter", 1, db.RIAfter, 2},

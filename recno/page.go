@@ -17,13 +17,14 @@ const (
 
 // Page types
 const (
-	pBInternal = 0x01 // btree internal page
-	pBLeaf     = 0x02 // leaf page
-	pOverflow  = 0x04 // overflow page
-	pRInternal = 0x08 // recno internal page
-	pRLeaf     = 0x10 // leaf page
-	pType      = 0x1f // type mask
-	pPreserve  = 0x20 // never delete this chain of pages
+	pBInternal = 1 << iota // btree internal page
+	pBLeaf                 // leaf page
+	pOverflow              // overflow page
+	pRInternal             // recno internal page
+	pRLeaf                 // leaf page
+	pPreserve              // never delete this chain of pages
+
+	pType = pPreserve - 1 // type mask
 )
 
 // Item flags

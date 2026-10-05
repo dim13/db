@@ -40,11 +40,11 @@ const (
 
 // Pair types
 const (
-	ovflPage    = 0
-	partialKey  = 1
-	fullKey     = 2
-	fullKeyData = 3
-	realKey     = 4
+	ovflPage    = iota // next page of chain
+	partialKey         // big pair, key continues
+	fullKey            // big pair, key or data continues
+	fullKeyData        // big pair, key complete, data starts
+	realKey            // regular pairs have offsets from here
 )
 
 const (
@@ -274,7 +274,7 @@ func (h *DB) Fd() uintptr {
 }
 
 // Sync writes all changes to disk, flag must be 0.
-func (h *DB) Sync(flag uint) error {
+func (h *DB) Sync(flag db.Flag) error {
 	if flag != 0 {
 		return db.ErrInvalid
 	}
@@ -411,7 +411,7 @@ func (h *DB) callHash(key []byte) int {
 }
 
 // Get returns the data stored under key, or ErrNotFound.
-func (h *DB) Get(key []byte, flag uint) ([]byte, error) {
+func (h *DB) Get(key []byte, flag db.Flag) ([]byte, error) {
 	if flag != 0 {
 		return nil, db.ErrInvalid
 	}
@@ -420,7 +420,7 @@ func (h *DB) Get(key []byte, flag uint) ([]byte, error) {
 
 // Put stores data under key, replacing an existing entry, and returns
 // key.  With RNoOverwrite it returns ErrKeyExist instead of replacing.
-func (h *DB) Put(key, data []byte, flag uint) ([]byte, error) {
+func (h *DB) Put(key, data []byte, flag db.Flag) ([]byte, error) {
 	if h.readOnly {
 		return nil, db.ErrReadOnly
 	}
@@ -439,7 +439,7 @@ func (h *DB) Put(key, data []byte, flag uint) ([]byte, error) {
 }
 
 // Del deletes key.  RCursor is accepted, as in C, and deletes key too.
-func (h *DB) Del(key []byte, flag uint) error {
+func (h *DB) Del(key []byte, flag db.Flag) error {
 	if flag != 0 && flag != db.RCursor {
 		return db.ErrInvalid
 	}
@@ -548,7 +548,7 @@ func (h *DB) access(action int, key, val []byte) ([]byte, error) {
 
 // Seq returns the next key/data pair in hash order, or ErrNotFound at the
 // end.  RFirst starts over.  The key argument is ignored.
-func (h *DB) Seq(_ []byte, flag uint) ([]byte, []byte, error) {
+func (h *DB) Seq(_ []byte, flag db.Flag) ([]byte, []byte, error) {
 	if flag != 0 && flag != db.RFirst && flag != db.RNext {
 		return nil, nil, db.ErrInvalid
 	}
