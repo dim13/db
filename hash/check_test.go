@@ -1,9 +1,12 @@
 package hash
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 
@@ -127,5 +130,54 @@ func TestStress(t *testing.T) {
 				t.Fatalf("op %d %s: %v", op, desc, err)
 			}
 		}
+	}
+}
+
+func TestCacheLimit(t *testing.T) {
+	f, err := os.Create(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := New(f, &Info{BucketSize: 512, CacheSize: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(when string) {
+		t.Helper()
+		// The scan cursor's page may stay on top of the limit.
+		if got, limit := h.lru.Len(), minBuffers+1; got > limit {
+			t.Fatalf("%s: %d buffers cached, want at most %d", when, got, limit)
+		}
+	}
+	for i := range 3000 {
+		k, v := dbtest.Gen(i)
+		if _, err := h.Put(k, v, 0); err != nil {
+			t.Fatal(err)
+		}
+		check(fmt.Sprintf("put %d", i))
+	}
+	n := 0
+	for flag := db.RFirst; ; flag = db.RNext {
+		_, _, err := h.Seq(nil, flag)
+		if errors.Is(err, db.ErrNotFound) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		check("seq")
+		n++
+	}
+	if n != 3000 {
+		t.Errorf("seq: got %d records, want 3000", n)
+	}
+	for i := range 3000 {
+		k, v := dbtest.Gen(i)
+		if got, err := h.Get(k, 0); err != nil || !bytes.Equal(got, v) {
+			t.Fatalf("get %d: %v", i, err)
+		}
+	}
+	if err := h.Close(); err != nil {
+		t.Fatal(err)
 	}
 }

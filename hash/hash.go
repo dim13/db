@@ -4,6 +4,7 @@ package hash
 
 import (
 	"bytes"
+	"container/list"
 	"encoding/binary"
 	"fmt"
 	"hash"
@@ -19,6 +20,8 @@ const (
 	oldVersion = 1
 
 	maxBSize       = 65536
+	defCacheSize   = 1 << 20
+	minBuffers     = 6
 	minHdrSize     = 512
 	defBucketSize  = 4096
 	defBucketShift = 12
@@ -80,6 +83,7 @@ type Info struct {
 	BucketSize int                // of a new file, rounded up to a power of 2, default 4096
 	FillFactor int                // keys per bucket before the table grows
 	NumElem    int                // expected number of keys, sizes a new table
+	CacheSize  int                // bytes of pages cached, default 1 MiB, at least 6 pages
 	Hash       func() hash.Hash32 // hash function constructor, e.g. fnv.New32a
 	ByteOrder  binary.ByteOrder   // byte order, nil for native
 	ReadOnly   bool               // refuse changes, never write
@@ -90,6 +94,7 @@ type buf struct {
 	page   []byte // actual page data
 	mod    bool   // modified
 	bucket bool   // bucket page, overflow page otherwise
+	elem   *list.Element
 }
 
 // DB is an open hash database.  It is not safe for concurrent use.
@@ -105,9 +110,12 @@ type DB struct {
 	modified bool
 	readOnly bool
 
-	// ponytail: unbounded buffer cache, every touched page stays in memory until Close
+	// LRU buffer cache, trimmed to limit between operations, as callers
+	// hold buffers during one.
 	buckets map[int]*buf
 	ovfls   map[int]*buf
+	lru     list.List // of *buf, most recently used first
+	limit   int       // buffers kept by trim, 0 for no limit
 
 	// sequential scan cursor
 	cpage   *buf
@@ -133,9 +141,19 @@ func New(file *os.File, info *Info) (*DB, error) {
 		ovfls:   make(map[int]*buf),
 		cbucket: -1,
 	}
+	cache := defCacheSize
 	if info != nil {
 		h.readOnly = info.ReadOnly
+		if info.CacheSize != 0 {
+			cache = info.CacheSize
+		}
 	}
+	// Set once the bucket size is known, in-memory tables can't evict.
+	defer func() {
+		if file != nil {
+			h.limit = max(cache/int(h.hdr.BSize), minBuffers)
+		}
+	}()
 	var size int64
 	if file != nil {
 		fi, err := file.Stat()
@@ -382,8 +400,10 @@ func (h *DB) getBuf(addr int, prev *buf, newpage bool) (*buf, error) {
 	if prev != nil {
 		m = h.ovfls
 	}
-	if b, ok := m[addr]; ok && !newpage {
-		return b, nil
+	old, ok := m[addr]
+	if ok && !newpage {
+		h.lru.MoveToFront(old.elem)
+		return old, nil
 	}
 	b := &buf{
 		addr:   addr,
@@ -393,8 +413,51 @@ func (h *DB) getBuf(addr int, prev *buf, newpage bool) (*buf, error) {
 	if err := h.getPage(b.page, addr, b.bucket, !newpage, false); err != nil {
 		return nil, err
 	}
+	if ok {
+		h.lru.Remove(old.elem)
+	}
+	b.elem = h.lru.PushFront(b)
 	m[addr] = b
 	return b, nil
+}
+
+// trim evicts least recently used buffers down to limit, writing modified
+// ones.  The scan cursor's page stays, Seq holds it across calls.
+func (h *DB) trim() error {
+	for el := h.lru.Back(); el != nil && h.limit > 0 && h.lru.Len() > h.limit; {
+		b := el.Value.(*buf)
+		prev := el.Prev()
+		if b == h.cpage {
+			el = prev
+			continue
+		}
+		if b.mod {
+			if h.readOnly {
+				return nil
+			}
+			if err := h.putPage(b.page, b.addr, b.bucket); err != nil {
+				return err
+			}
+			b.mod = false
+		}
+		m := h.ovfls
+		if b.bucket {
+			m = h.buckets
+		}
+		if m[b.addr] == b {
+			delete(m, b.addr)
+		}
+		h.lru.Remove(el)
+		el = prev
+	}
+	return nil
+}
+
+// done trims the cache after an operation, keeping the first error.
+func (h *DB) done(err *error) {
+	if terr := h.trim(); *err == nil {
+		*err = terr
+	}
 }
 
 func (h *DB) sum(key []byte) uint32 {
@@ -413,7 +476,8 @@ func (h *DB) callHash(key []byte) int {
 }
 
 // Get returns the data stored under key, or ErrNotFound.
-func (h *DB) Get(key []byte, flag db.Flag) ([]byte, error) {
+func (h *DB) Get(key []byte, flag db.Flag) (data []byte, err error) {
+	defer h.done(&err)
 	if flag != 0 {
 		return nil, db.ErrInvalid
 	}
@@ -422,7 +486,8 @@ func (h *DB) Get(key []byte, flag db.Flag) ([]byte, error) {
 
 // Put stores data under key, replacing an existing entry, and returns
 // key.  With RNoOverwrite it returns ErrKeyExist instead of replacing.
-func (h *DB) Put(key, data []byte, flag db.Flag) ([]byte, error) {
+func (h *DB) Put(key, data []byte, flag db.Flag) (rkey []byte, err error) {
+	defer h.done(&err)
 	if h.readOnly {
 		return nil, db.ErrReadOnly
 	}
@@ -441,14 +506,15 @@ func (h *DB) Put(key, data []byte, flag db.Flag) ([]byte, error) {
 }
 
 // Del deletes key.  RCursor is accepted, as in C, and deletes key too.
-func (h *DB) Del(key []byte, flag db.Flag) error {
+func (h *DB) Del(key []byte, flag db.Flag) (err error) {
+	defer h.done(&err)
 	if flag != 0 && flag != db.RCursor {
 		return db.ErrInvalid
 	}
 	if h.readOnly {
 		return db.ErrReadOnly
 	}
-	_, err := h.access(actionDelete, key, nil)
+	_, err = h.access(actionDelete, key, nil)
 	return err
 }
 
@@ -550,7 +616,8 @@ func (h *DB) access(action int, key, val []byte) ([]byte, error) {
 
 // Seq returns the next key/data pair in hash order, or ErrNotFound at the
 // end.  RFirst starts over.  The key argument is ignored.
-func (h *DB) Seq(_ []byte, flag db.Flag) ([]byte, []byte, error) {
+func (h *DB) Seq(_ []byte, flag db.Flag) (rkey, data []byte, err error) {
+	defer h.done(&err)
 	if flag != 0 && flag != db.RFirst && flag != db.RNext {
 		return nil, nil, db.ErrInvalid
 	}
@@ -562,7 +629,6 @@ func (h *DB) Seq(_ []byte, flag db.Flag) ([]byte, []byte, error) {
 
 	var bufp *buf
 	var bp hpage
-	var err error
 	for bp.b == nil || bp.at(0) == 0 {
 		if bufp = h.cpage; bufp == nil {
 			bucket := h.cbucket
@@ -605,7 +671,7 @@ func (h *DB) Seq(_ []byte, flag db.Flag) ([]byte, []byte, error) {
 		end = bp.at(ndx - 1)
 	}
 	key := bytes.Clone(bufp.page[bp.at(ndx):end])
-	data := bytes.Clone(bufp.page[bp.at(ndx+1):bp.at(ndx)])
+	data = bytes.Clone(bufp.page[bp.at(ndx+1):bp.at(ndx)])
 	if ndx += 2; ndx > bp.at(0) {
 		h.cpage = nil
 		h.cbucket++

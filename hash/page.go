@@ -566,6 +566,7 @@ func (h *DB) freeOvflpage(obufp *buf) error {
 	h.clrbit(freep, freeBit)
 	if h.ovfls[addr] == obufp {
 		delete(h.ovfls, addr)
+		h.lru.Remove(obufp.elem)
 	}
 	return nil
 }

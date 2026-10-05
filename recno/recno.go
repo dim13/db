@@ -37,6 +37,7 @@ const (
 type Info struct {
 	Flags     Flag             // RFixedLen, RNoKey, RSnapshot
 	PageSize  int              // of a new btree file, default 4096
+	CacheSize int              // bytes of btree pages cached, default 1 MiB, at least 5 pages
 	ByteOrder binary.ByteOrder // byte order, nil for native
 	RecordLen int              // length of fixed-length records
 	Delimiter byte             // delimiter, newline if zero; pad byte of fixed-length records
@@ -56,16 +57,16 @@ type DB struct {
 // database, which also closes file and Info.BTreeFile.
 func New(file *os.File, info *Info) (*DB, error) {
 	var bfile *os.File
-	var psize int
+	var psize, cache int
 	var order binary.ByteOrder
 	if info != nil {
 		if info.Flags&^(RFixedLen|RNoKey|RSnapshot) != 0 {
 			return nil, db.ErrInvalid
 		}
 		bfile = info.BTreeFile
-		psize, order = info.PageSize, info.ByteOrder
+		psize, cache, order = info.PageSize, info.CacheSize, info.ByteOrder
 	}
-	t, err := openTree(bfile, psize, order)
+	t, err := openTree(bfile, psize, cache, order)
 	if err != nil {
 		return nil, err
 	}
@@ -88,6 +89,7 @@ func New(file *os.File, info *Info) (*DB, error) {
 	t.flags |= rRecno
 	if info != nil && info.ReadOnly {
 		t.flags |= bRdOnly
+		t.mp.noWrite = true
 	}
 	if file == nil {
 		t.flags |= rEOF | rInMem
@@ -160,8 +162,9 @@ func (r *DB) Fd() uintptr {
 }
 
 // Get returns the record numbered key, or ErrNotFound.
-func (r *DB) Get(key []byte, flag db.Flag) ([]byte, error) {
+func (r *DB) Get(key []byte, flag db.Flag) (data []byte, err error) {
 	t := r.t
+	defer t.done(&err)
 	nrec, err := keyNum(key)
 	if err != nil {
 		return nil, err
@@ -192,8 +195,9 @@ func (r *DB) Get(key []byte, flag db.Flag) ([]byte, error) {
 // before or after record key, RSetCursor also moves the cursor there,
 // RCursor replaces the record at the cursor, and RNoOverwrite returns
 // ErrKeyExist for an existing record.
-func (r *DB) Put(key, data []byte, flag db.Flag) ([]byte, error) {
+func (r *DB) Put(key, data []byte, flag db.Flag) (rkey []byte, err error) {
 	t := r.t
+	defer t.done(&err)
 	if t.flags&bRdOnly != 0 {
 		return nil, db.ErrReadOnly
 	}
@@ -336,12 +340,12 @@ func (t *tree) iput(nrec uint32, data []byte, flag db.Flag) error {
 
 // Del deletes the record numbered key, or with RCursor the record at the
 // cursor, renumbering the records after it.
-func (r *DB) Del(key []byte, flag db.Flag) error {
+func (r *DB) Del(key []byte, flag db.Flag) (err error) {
 	t := r.t
+	defer t.done(&err)
 	if t.flags&bRdOnly != 0 {
 		return db.ErrReadOnly
 	}
-	var err error
 	switch flag {
 	case 0:
 		nrec, kerr := keyNum(key)
@@ -473,8 +477,9 @@ func (t *tree) record(e epg) ([]byte, error) {
 // Seq returns the next record number and record, or ErrNotFound at the
 // end.  RFirst and RLast start at either end, RCursor at record key; RNext
 // and RPrev continue the scan.
-func (r *DB) Seq(key []byte, flag db.Flag) ([]byte, []byte, error) {
+func (r *DB) Seq(key []byte, flag db.Flag) (rkey, data []byte, err error) {
 	t := r.t
+	defer t.done(&err)
 	var nrec uint32
 	switch flag {
 	case db.RCursor:
@@ -523,7 +528,7 @@ func (r *DB) Seq(key []byte, flag db.Flag) ([]byte, []byte, error) {
 	t.cursor.flags |= cursInit
 	t.cursor.rcursor = nrec
 
-	data, err := t.record(*e)
+	data, err = t.record(*e)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -571,6 +576,9 @@ func (r *DB) syncFile() error {
 		if t.flags&rFixLen == 0 {
 			data = append(data, t.bval)
 		}
+		if err := t.mp.trim(); err != nil {
+			return err
+		}
 		n, err := w.Write(data)
 		if err != nil {
 			return err
@@ -617,6 +625,10 @@ func (t *tree) irec(top uint32) error {
 			return err
 		}
 		if err := t.iput(t.nrecs, data, 0); err != nil {
+			return err
+		}
+		// Reading a large file is one operation, keep the cache bounded.
+		if err := t.mp.trim(); err != nil {
 			return err
 		}
 	}

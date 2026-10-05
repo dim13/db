@@ -20,6 +20,8 @@ const (
 	maxPSize      = 1 << 16
 	defPSize      = 4096
 	defMinKeyPage = 2
+	defCacheSize  = 1 << 20
+	minCache      = 5 // pages
 )
 
 // Flag is an option of Info.Flags.
@@ -57,6 +59,7 @@ type Info struct {
 	Flags          Flag                  // RDup
 	MinKeysPerPage int                   // default 2, larger keys and data go to overflow pages
 	PageSize       int                   // of a new file, default 4096
+	CacheSize      int                   // bytes of pages cached, default 1 MiB, at least 5 pages
 	Compare        func(a, b []byte) int // key comparison function
 	Prefix         func(a, b []byte) int // prefix function
 	ByteOrder      binary.ByteOrder      // byte order, nil for native
@@ -197,7 +200,11 @@ func New(file *os.File, info *Info) (*DB, error) {
 		t.ovflsize = minSize
 	}
 
-	t.mp = newMpool(file, t.psize, size)
+	if b.CacheSize == 0 {
+		b.CacheSize = defCacheSize
+	}
+	t.mp = newMpool(file, t.psize, size, max(b.CacheSize/t.psize, minCache))
+	t.mp.noWrite = t.flags&bRdOnly != 0
 	if err := t.nroot(); err != nil {
 		return nil, err
 	}
@@ -268,6 +275,13 @@ func (t *DB) Fd() uintptr {
 }
 
 // Sync writes all changes to disk, flag must be 0.
+// done trims the page cache after an operation, keeping the first error.
+func (t *DB) done(err *error) {
+	if terr := t.mp.trim(); *err == nil {
+		*err = terr
+	}
+}
+
 func (t *DB) Sync(flag db.Flag) error {
 	if flag != 0 {
 		return db.ErrInvalid
@@ -565,7 +579,8 @@ func (t *DB) sibling(pg uint32, index int, key []byte) (bool, error) {
 
 // Get returns the data stored under key, or ErrNotFound.  With duplicates
 // it returns one of them.
-func (t *DB) Get(key []byte, flag db.Flag) ([]byte, error) {
+func (t *DB) Get(key []byte, flag db.Flag) (data []byte, err error) {
+	defer t.done(&err)
 	if flag != 0 {
 		return nil, db.ErrInvalid
 	}
@@ -576,14 +591,15 @@ func (t *DB) Get(key []byte, flag db.Flag) ([]byte, error) {
 	if !exact {
 		return nil, db.ErrNotFound
 	}
-	_, data, err := t.ret(*e, false, true)
+	_, data, err = t.ret(*e, false, true)
 	return data, err
 }
 
 // Put stores data under key and returns key.  Without RDup it replaces an
 // existing entry; with RNoOverwrite it returns ErrKeyExist instead; with
 // RCursor it replaces the entry at the cursor.
-func (t *DB) Put(key, data []byte, flag db.Flag) ([]byte, error) {
+func (t *DB) Put(key, data []byte, flag db.Flag) (rkey []byte, err error) {
+	defer t.done(&err)
 	if err := t.put(key, data, flag); err != nil {
 		return nil, err
 	}

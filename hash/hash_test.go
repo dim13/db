@@ -64,6 +64,7 @@ func TestModel(t *testing.T) {
 		{name: "bsize8192", info: &Info{BucketSize: 8192, FillFactor: 8}},
 		{name: "fnv", info: &Info{Hash: fnv.New32a}},
 		{name: "littleendian", info: &Info{BucketSize: 512, ByteOrder: binary.LittleEndian}},
+		{name: "cache6", info: &Info{BucketSize: 512, CacheSize: 1}},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {

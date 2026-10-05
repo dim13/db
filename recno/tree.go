@@ -18,6 +18,8 @@ const (
 	maxPSize      = 1 << 16
 	defPSize      = 4096
 	defMinKeyPage = 2
+	defCacheSize  = 1 << 20
+	minCache      = 5 // pages
 )
 
 // Tree flags; bNoDups and rRecno are stored on disk
@@ -83,7 +85,7 @@ func validPSize(n int) bool {
 }
 
 // openTree opens a btree backed by file, or an in-memory tree if file is nil
-func openTree(file *os.File, psize int, o binary.ByteOrder) (*tree, error) {
+func openTree(file *os.File, psize, cache int, o binary.ByteOrder) (*tree, error) {
 	if psize != 0 && !validPSize(psize) {
 		return nil, fmt.Errorf("%w: page size %d", db.ErrInvalid, psize)
 	}
@@ -143,7 +145,10 @@ func openTree(file *os.File, psize int, o binary.ByteOrder) (*tree, error) {
 		t.ovflsize = minSize
 	}
 
-	t.mp = newMpool(file, t.psize, size)
+	if cache == 0 {
+		cache = defCacheSize
+	}
+	t.mp = newMpool(file, t.psize, size, max(cache/t.psize, minCache))
 	if err := t.nroot(); err != nil {
 		return nil, err
 	}
@@ -202,6 +207,13 @@ func (t *tree) close() error {
 		return t.file.Close()
 	}
 	return nil
+}
+
+// done trims the page cache after an operation, keeping the first error.
+func (t *tree) done(err *error) {
+	if terr := t.mp.trim(); *err == nil {
+		*err = terr
+	}
 }
 
 func (t *tree) sync() error {

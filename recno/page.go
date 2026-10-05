@@ -1,6 +1,7 @@
 package recno
 
 import (
+	"container/list"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -46,23 +47,34 @@ func nrleafdbt(dsize int) int {
 	return lalign(4 + 1 + dsize)
 }
 
-// mpool is a page cache.
-// ponytail: unbounded, every touched page stays in memory until Close; add LRU eviction if files outgrow RAM
+// mpool is an LRU page cache.  Callers hold page slices during an
+// operation, so pages are only evicted by trim between operations.
 type mpool struct {
-	file   *os.File
-	psize  int
-	npages uint32
-	pages  map[uint32][]byte
-	mod    map[uint32]bool
+	file    *os.File
+	psize   int
+	npages  uint32
+	limit   int  // pages kept by trim, 0 for no limit
+	noWrite bool // read-only, dirty pages stay cached
+	pages   map[uint32]*list.Element
+	lru     list.List // of *cpage, most recently used first
 }
 
-func newMpool(file *os.File, psize int, size int64) *mpool {
+type cpage struct {
+	pgno uint32
+	b    []byte
+	mod  bool
+}
+
+func newMpool(file *os.File, psize int, size int64, limit int) *mpool {
+	if file == nil {
+		limit = 0 // nowhere to evict to
+	}
 	return &mpool{
 		file:   file,
 		psize:  psize,
 		npages: uint32(size / int64(psize)),
-		pages:  make(map[uint32][]byte),
-		mod:    make(map[uint32]bool),
+		limit:  limit,
+		pages:  make(map[uint32]*list.Element),
 	}
 }
 
@@ -70,8 +82,9 @@ func (m *mpool) get(pgno uint32) ([]byte, error) {
 	if pgno >= m.npages {
 		return nil, db.ErrNoPage
 	}
-	if p, ok := m.pages[pgno]; ok {
-		return p, nil
+	if el, ok := m.pages[pgno]; ok {
+		m.lru.MoveToFront(el)
+		return el.Value.(*cpage).b, nil
 	}
 	p := make([]byte, m.psize)
 	if _, err := m.file.ReadAt(p, int64(pgno)*int64(m.psize)); err != nil {
@@ -80,7 +93,7 @@ func (m *mpool) get(pgno uint32) ([]byte, error) {
 		}
 		return nil, fmt.Errorf("page %d: %w", pgno, err)
 	}
-	m.pages[pgno] = p
+	m.pages[pgno] = m.lru.PushFront(&cpage{pgno: pgno, b: p})
 	return p, nil
 }
 
@@ -88,26 +101,54 @@ func (m *mpool) new() (uint32, []byte) {
 	pgno := m.npages
 	m.npages++
 	p := make([]byte, m.psize)
-	m.pages[pgno] = p
-	m.mod[pgno] = true
+	m.pages[pgno] = m.lru.PushFront(&cpage{pgno: pgno, b: p, mod: true})
 	return pgno, p
 }
 
+// dirty marks a page cached since get or new of the same operation
 func (m *mpool) dirty(pgno uint32) {
-	m.mod[pgno] = true
+	m.pages[pgno].Value.(*cpage).mod = true
+}
+
+func (m *mpool) write(p *cpage) error {
+	if _, err := m.file.WriteAt(p.b, int64(p.pgno)*int64(m.psize)); err != nil {
+		return err
+	}
+	p.mod = false
+	return nil
 }
 
 func (m *mpool) sync() error {
 	if m.file == nil {
 		return nil
 	}
-	for pgno := range m.mod {
-		if _, err := m.file.WriteAt(m.pages[pgno], int64(pgno)*int64(m.psize)); err != nil {
-			return err
+	for el := m.lru.Front(); el != nil; el = el.Next() {
+		if p := el.Value.(*cpage); p.mod {
+			if err := m.write(p); err != nil {
+				return err
+			}
 		}
-		delete(m.mod, pgno)
 	}
 	return m.file.Sync()
+}
+
+// trim evicts least recently used pages down to limit, writing dirty ones
+func (m *mpool) trim() error {
+	for m.limit > 0 && m.lru.Len() > m.limit {
+		el := m.lru.Back()
+		p := el.Value.(*cpage)
+		if p.mod {
+			if m.noWrite {
+				return nil
+			}
+			if err := m.write(p); err != nil {
+				return err
+			}
+		}
+		m.lru.Remove(el)
+		delete(m.pages, p.pgno)
+	}
+	return nil
 }
 
 // page is a view on a tree page

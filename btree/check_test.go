@@ -1,12 +1,16 @@
 package btree
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/dim13/db"
+	"github.com/dim13/db/dbtest"
 )
 
 // check verifies leaves are non-empty and linked in order
@@ -102,5 +106,34 @@ func TestItemPageType(t *testing.T) {
 	p.init(1, pInvalid, pInvalid, pOverflow, 512)
 	if _, err := p.item(0); !errors.Is(err, db.ErrFormat) {
 		t.Errorf("got %v, want %v", err, db.ErrFormat)
+	}
+}
+
+func TestCacheLimit(t *testing.T) {
+	f, err := os.Create(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := New(f, &Info{PageSize: 512, CacheSize: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 2000 {
+		k, v := dbtest.Gen(i)
+		if _, err := d.Put(k, v, 0); err != nil {
+			t.Fatal(err)
+		}
+		if got, want := d.mp.lru.Len(), minCache; got > want {
+			t.Fatalf("put %d: %d pages cached, want at most %d", i, got, want)
+		}
+	}
+	for i := range 2000 {
+		k, v := dbtest.Gen(i)
+		if got, err := d.Get(k, 0); err != nil || !bytes.Equal(got, v) {
+			t.Fatalf("get %d: %v", i, err)
+		}
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
 	}
 }

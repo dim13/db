@@ -32,6 +32,7 @@ func TestModel(t *testing.T) {
 		{name: "default"},
 		{name: "psize512", info: &Info{PageSize: 512}},
 		{name: "bigendian", info: &Info{PageSize: 1024, ByteOrder: binary.BigEndian}},
+		{name: "cache5", info: &Info{PageSize: 512, CacheSize: 1}},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {

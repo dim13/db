@@ -5,11 +5,11 @@ import "github.com/dim13/db"
 // Seq returns the next key/data pair in key order, or ErrNotFound at the
 // end.  RFirst and RLast start at either end, RCursor at the first key not
 // less than key; RNext and RPrev continue the scan.
-func (t *DB) Seq(key []byte, flag db.Flag) ([]byte, []byte, error) {
+func (t *DB) Seq(key []byte, flag db.Flag) (rkey, data []byte, err error) {
+	defer t.done(&err)
 	// If scan uninitialized as yet, or starting at a specific record, set
 	// the scan to a specific key.
 	var e epg
-	var err error
 	switch flag {
 	case db.RNext, db.RPrev:
 		if t.cursor.flags&cursInit != 0 {
