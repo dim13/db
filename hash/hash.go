@@ -122,7 +122,7 @@ const (
 
 // New opens a hash table backed by file, or an in-memory table if file is
 // nil.  An empty file is initialized as a new table.
-func New(file *os.File, info *Info) (db.DB, error) {
+func New(file *os.File, info *Info) (*Hash, error) {
 	h := &Hash{
 		file:    file,
 		hash:    defaultHash,

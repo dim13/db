@@ -58,7 +58,7 @@ func (t *BTree) check() error {
 }
 
 func TestDupCheck(t *testing.T) {
-	tr, err := newBTree(nil, &Info{Flags: RDup, PSize: 512})
+	tr, err := New(nil, &Info{Flags: RDup, PSize: 512})
 	if err != nil {
 		t.Fatal(err)
 	}

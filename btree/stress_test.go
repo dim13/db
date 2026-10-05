@@ -16,7 +16,7 @@ func TestStress(t *testing.T) {
 		t.Skip()
 	}
 	every, _ := strconv.Atoi(os.Getenv("EVERY"))
-	tr, _ := newBTree(nil, &Info{PSize: 512})
+	tr, _ := New(nil, &Info{PSize: 512})
 	r := rand.New(rand.NewPCG(1, 2))
 	for op := range n {
 		i := r.IntN(n / 2)

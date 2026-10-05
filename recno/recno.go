@@ -49,7 +49,7 @@ type RecNo struct {
 
 // New opens a recno database backed by flat text file, or an in-memory one
 // if file is nil
-func New(file *os.File, info *Info) (db.DB, error) {
+func New(file *os.File, info *Info) (*RecNo, error) {
 	var bfile *os.File
 	var psize int
 	var lorder binary.ByteOrder

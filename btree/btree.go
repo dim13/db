@@ -96,15 +96,7 @@ func validPSize(n int) bool {
 
 // New opens a btree backed by file, or an in-memory tree if file is nil.
 // An empty file is initialized as a new tree.
-func New(file *os.File, info *Info) (db.DB, error) {
-	t, err := newBTree(file, info)
-	if err != nil {
-		return nil, err
-	}
-	return t, nil
-}
-
-func newBTree(file *os.File, info *Info) (*BTree, error) {
+func New(file *os.File, info *Info) (*BTree, error) {
 	var b Info
 	if info != nil {
 		b = *info
