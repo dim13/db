@@ -1,0 +1,342 @@
+github.com/dim13/db                                         October 2026
+Category: Informational
+
+
+              Berkeley DB 1.85 B-Tree File Format
+
+
+Abstract
+
+   This document describes the on-disk format of the B-Tree access
+   method of Berkeley DB 1.85, as created by dbopen(3) with type
+   DB_BTREE in 4.4BSD and its descendants.  It is written from the C
+   implementation and the Go port in this repository, and notes where
+   the two deliberately differ.
+
+Table of Contents
+
+   1.  Conventions
+   2.  Overview
+   3.  Byte Order
+   4.  Meta-data Page
+   5.  Page Header
+   6.  Internal Pages
+   7.  Leaf Pages
+   8.  Overflow Pages
+   9.  Free List
+   10. Key Ordering and Duplicates
+   11. Placement Rules
+   12. Known Defects of 1.85
+   13. Constants
+
+
+1.  Conventions
+
+   The key words "MUST", "MUST NOT", "SHOULD", "SHOULD NOT" and "MAY"
+   in this document are to be interpreted as described in RFC 2119.
+
+   All offsets are in bytes from the start of the page they refer to.
+   u8, u16 and u32 denote unsigned integers of 1, 2 and 4 bytes, in
+   the byte order of the file (Section 3).  Structures are packed,
+   there is no padding between fields.
+
+   LALIGN(n) rounds n up to a multiple of 4:
+
+      LALIGN(n) = (n + 3) & ~3
+
+   A page number of 0 (P_INVALID) in a link field means "none".
+
+
+2.  Overview
+
+   A B-Tree file is an array of fixed size pages.  Page n starts at
+   byte offset n * psize.  The page size psize is fixed when the file
+   is created and recorded in the meta-data page.
+
+      +--------+--------+--------+--------+-----
+      | page 0 | page 1 | page 2 | page 3 | ...
+      |  meta  |  root  |        |        |
+      +--------+--------+--------+--------+-----
+
+   Page 0 holds the meta-data.  Page 1 is always the root of the tree.
+   All other pages are internal pages, leaf pages, overflow pages or
+   free pages, in no particular order.
+
+   Keys and data are opaque byte strings.  Each leaf entry holds one
+   key/data pair.  Internal entries route searches to child pages.
+   Items too large for a page are stored on chains of overflow pages.
+
+   The same structure, with different internal and leaf entries, backs
+   the record number access method, see "recno.txt".
+
+
+3.  Byte Order
+
+   All integers on all pages, including the meta-data page, are stored
+   in one byte order, chosen when the file is created ("lorder").  The
+   byte order is not recorded explicitly.  A reader determines it from
+   the magic number (Section 4): if the first four bytes of the file,
+   read as a little endian u32, equal the magic number, the file is
+   little endian; if read as big endian they equal it, the file is big
+   endian; otherwise the file is not a B-Tree file.
+
+   Key and data bytes, and the contents of overflow pages, are never
+   byte swapped.
+
+
+4.  Meta-data Page
+
+   Page 0 begins with the following structure; the rest of the page is
+   unused and SHOULD be zero.
+
+       0                   1                   2                   3
+       0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    0 |                         magic (u32)                           |
+      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    4 |                        version (u32)                          |
+      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    8 |                         psize (u32)                           |
+      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   12 |                          free (u32)                           |
+      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   16 |                         nrecs (u32)                           |
+      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   20 |                         flags (u32)                           |
+      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+   magic    MUST be 0x00053162.
+
+   version  MUST be 3.
+
+   psize    The page size.  It MUST be even, at least 512 and at most
+            65536.
+
+   free     Page number of the first page on the free list (Section 9),
+            or 0 if the list is empty.
+
+   nrecs    Number of records.  Used only by record number trees; a
+            B-Tree writer MUST preserve the value it read.
+
+   flags    Persistent tree flags.  No other bits than these MUST be
+            set:
+
+               0x00000020  B_NODUPS  duplicate keys are not permitted
+               0x00000080  R_RECNO   record number tree, see recno.txt
+
+   A B-Tree reader MUST reject a file with R_RECNO set.
+
+
+5.  Page Header
+
+   Every page except page 0 begins with a 20 byte header:
+
+       0                   1                   2                   3
+       0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    0 |                          pgno (u32)                           |
+      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    4 |                         prevpg (u32)                          |
+      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    8 |                         nextpg (u32)                          |
+      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   12 |                          flags (u32)                          |
+      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   16 |          lower (u16)          |          upper (u16)          |
+      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   20 |          linp[0] (u16)        |          linp[1] (u16)        |
+      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+      |                              ...                              |
+
+   pgno     The number of this page.
+
+   prevpg   The left sibling on the same tree level, or 0.
+
+   nextpg   The right sibling on the same tree level, or 0.  On
+            overflow and free pages, the next page of the chain.
+
+   flags    Page type, exactly one of:
+
+               0x01  P_BINTERNAL  B-Tree internal page
+               0x02  P_BLEAF      B-Tree leaf page
+               0x04  P_OVERFLOW   overflow page
+               0x08  P_RINTERNAL  record number internal page
+               0x10  P_RLEAF      record number leaf page
+
+            possibly combined with
+
+               0x20  P_PRESERVE   overflow chain referenced by an
+                                  internal page, never freed
+
+   lower    Offset of the first byte past the index array.  The number
+            of entries on the page is (lower - 20) / 2.
+
+   upper    Offset of the first byte of the item area.  Items are
+            packed from the end of the page towards the index array;
+            the free space is [lower, upper).  If psize is 65536, an
+            empty page has upper 65536, which wraps to 0 in a u16; a
+            reader MUST treat upper 0 on a non-overflow page as 65536.
+
+   linp[i]  Offset of item i.  The index array is kept in key order;
+            the items themselves are in no particular order.
+
+      +--------+------------------+-------------+----------------+
+      | header | linp[0..n-1] --> | free space  | <-- items      |
+      +--------+------------------+-------------+----------------+
+      0       20                lower        upper           psize
+
+   Items start at 4 byte aligned offsets and their sizes are rounded
+   with LALIGN.
+
+
+6.  Internal Pages
+
+   Each entry of a P_BINTERNAL page is
+
+      +--------------+--------------+-----------+------------------+
+      | ksize (u32)  | pgno (u32)   | flags (u8)| key (ksize)      |
+      +--------------+--------------+-----------+------------------+
+
+   occupying LALIGN(9 + ksize) bytes.
+
+   pgno     The child page.
+
+   flags    0x02 P_BIGKEY if the key is on overflow pages; key then
+            holds an overflow reference (Section 8) and ksize is 8.
+
+   key      A separator key.  All keys in the subtree of pgno compare
+            greater than or equal to it and less than the separator of
+            the next entry.
+
+   The key of entry 0 on the leftmost page of every internal level is
+   never compared and compares less than any key; writers store it
+   with ksize 0.
+
+   Separators taken from leaf pages MAY be shortened to the shortest
+   prefix that still distinguishes the new right page from the last key
+   of the left page ("prefix compression").  This applies only to the
+   level directly above the leaves, and never to overflow keys.
+
+   When a separator refers to an overflow key, the first page of that
+   chain MUST carry P_PRESERVE, since the chain is now shared with a
+   leaf entry and MUST NOT be freed when the leaf entry is deleted.
+
+
+7.  Leaf Pages
+
+   Each entry of a P_BLEAF page is a key/data pair:
+
+      +-------------+-------------+-----------+-----------+------------+
+      | ksize (u32) | dsize (u32) | flags (u8)| key       | data       |
+      +-------------+-------------+-----------+-----------+------------+
+
+   occupying LALIGN(9 + ksize + dsize) bytes.
+
+   flags    Combination of
+
+               0x01  P_BIGDATA  data is on overflow pages
+               0x02  P_BIGKEY   key is on overflow pages
+
+            If a flag is set, the corresponding field holds an 8 byte
+            overflow reference and its size field is 8.
+
+   All leaf pages of the tree form a doubly linked list through prevpg
+   and nextpg, in key order.  Internal pages of each level are linked
+   the same way.
+
+   An empty tree consists of the root page as an empty P_BLEAF page.
+   Leaf pages other than the root MUST NOT be empty.
+
+
+8.  Overflow Pages
+
+   An overflow reference is 8 bytes:
+
+      +-------------+-------------+
+      | pgno (u32)  | size (u32)  |
+      +-------------+-------------+
+
+   pgno is the first page of a chain, size the length of the item.  An
+   overflow page has the page header of Section 5 with flags
+   P_OVERFLOW, prevpg 0 and lower and upper 0.  The item bytes follow
+   the header; each page holds psize - 20 bytes, the last page holds
+   the remainder.  Pages are chained through nextpg.  Each chain holds
+   exactly one item.
+
+
+9.  Free List
+
+   Pages released by deletes are kept on a singly linked list headed by
+   the free field of the meta-data page and chained through nextpg,
+   with prevpg 0.  Writers SHOULD allocate from the free list before
+   extending the file.  Pages are never returned to the file system.
+
+   The root page is never freed; when it empties it becomes an empty
+   P_BLEAF page again.
+
+
+10. Key Ordering and Duplicates
+
+   Keys are ordered by a comparison function chosen by the application.
+   The default compares bytes as unsigned values, the shorter of two
+   keys with equal prefix ordering first.  The comparison function is
+   not recorded in the file; using a different one than the writer is
+   undefined.
+
+   If B_NODUPS is clear, several entries MAY have equal keys.  Their
+   relative order is not defined and they MAY span several leaf pages.
+
+
+11. Placement Rules
+
+   These rules are not needed to read a file, but writers SHOULD follow
+   them to produce files 1.85 readers handle well.
+
+   A key/data pair moves to overflow pages if ksize + dsize exceeds
+
+      ovflsize = (psize - 20) / minkeypage - (2 + LALIGN(9))
+
+   but no less than LALIGN(9 + 8 + 8) + 2, where minkeypage defaults
+   to 2.  The data moves first; if the pair still does not fit, the
+   key moves too.
+
+   A full page splits into two, roughly by half of the used bytes.
+   When the last page of a level splits because of an append, the new
+   entry alone MAY start the new right page, which fills sequentially
+   loaded trees nearly completely.
+
+
+12. Known Defects of 1.85
+
+   The following defects of the C implementation affect files and are
+   avoided by the Go implementation:
+
+   o  put searched for overflow keys by their reference instead of the
+      key itself, placing them out of order.  Such files are readable,
+      but some keys cannot be found by search.
+
+   o  Splitting the root dropped P_BIGKEY on the new separator.
+
+   o  Splits ignored the index array when sizing the left page, and
+      could produce an empty right page.
+
+   o  The free list and record count were only written for newly
+      created files, losing the free list of reopened files.
+
+   o  When converting a page of non-native byte order, an entry with
+      P_BIGDATA but without P_BIGKEY had four key bytes swapped
+      instead of the data reference.  Such files written by C on a
+      host of the other byte order are not portable.
+
+
+13. Constants
+
+      magic               0x00053162
+      version             3
+      page header size    20
+      min psize           512
+      max psize           65536
+      default psize       file system block size (Go: 4096)
+      default minkeypage  2
+      P_INVALID, P_META   0
+      P_ROOT              1

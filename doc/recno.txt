@@ -1,0 +1,196 @@
+github.com/dim13/db                                         October 2026
+Category: Informational
+
+
+           Berkeley DB 1.85 Record Number (Recno) Format
+
+
+Abstract
+
+   This document describes the record number access method of Berkeley
+   DB 1.85, as created by dbopen(3) with type DB_RECNO.  A recno
+   database is a flat text file of records, optionally mirrored in a
+   B-Tree file of a special kind.  Both are described.
+
+Table of Contents
+
+   1.  Conventions
+   2.  Overview
+   3.  Flat File
+   4.  Backing Tree File
+   5.  Record Internal Pages
+   6.  Record Leaf Pages
+   7.  Record Numbers
+   8.  Synchronization
+   9.  Constants
+
+
+1.  Conventions
+
+   The key words "MUST", "MUST NOT", "SHOULD", "SHOULD NOT" and "MAY"
+   in this document are to be interpreted as described in RFC 2119.
+
+   Terms, integer notation, LALIGN, the page header and overflow pages
+   are those of "btree.txt".
+
+
+2.  Overview
+
+   Records are byte strings addressed by their position, a record
+   number starting at 1.  Inserting or deleting a record renumbers all
+   records after it.
+
+   The authoritative copy of the records is the flat file (Section 3).
+   While the database is open, records are kept in a tree (Section 4),
+   read from the flat file on demand, and written back to it as a whole
+   when the database is synchronized.  The tree lives in a temporary
+   file or in memory, unless the application names a tree file, in
+   which case it persists.
+
+   A database without flat file exists only in memory or in its tree
+   file.
+
+
+3.  Flat File
+
+   The flat file has one of two forms, chosen by the application and
+   not recorded anywhere:
+
+   Variable length records
+
+      Records are separated by a delimiter byte (bval), newline (0x0A)
+      if the application gives no parameters at all, otherwise the byte
+      it gives, NUL if left zero.  Every record is followed by the
+      delimiter.  A reader MUST also accept a final record without
+      delimiter.  An empty file holds no records; a file of a single
+      delimiter holds one empty record.
+
+         +----------+---+----------+---+---   ---+----------+---+
+         | record 1 | d | record 2 | d |   ...   | record n | d |
+         +----------+---+----------+---+---   ---+----------+---+
+
+      Records MUST NOT contain the delimiter.
+
+   Fixed length records
+
+      Records are reclen bytes each, back to back, with no delimiter.
+      Records shorter than reclen are padded with the byte bval given
+      by the application, NUL if left zero.  A reader MUST pad a short
+      final record.
+
+         +-----------+-----------+---   ---+-----------+
+         | reclen    | reclen    |   ...   | reclen    |
+         +-----------+-----------+---   ---+-----------+
+
+   The flat file has no header, magic number or byte order.
+
+
+4.  Backing Tree File
+
+   The tree file is a B-Tree file (see btree.txt) with these
+   differences:
+
+   o  The meta-data flags field MUST have R_RECNO (0x80) set.  Writers
+      also set B_NODUPS (0x20).
+
+   o  The meta-data nrecs field holds the number of records.
+
+   o  Internal pages are P_RINTERNAL (Section 5), leaf pages P_RLEAF
+      (Section 6).  P_BINTERNAL and P_BLEAF pages MUST NOT occur, except
+      that a freshly created root MAY be an empty P_BLEAF page, which a
+      reader MUST treat as an empty P_RLEAF page.
+
+   o  There are no keys.  Records are ordered by position only.
+
+   As in C, pages of a tree file are only portable between hosts of
+   the same byte order: the C implementation does not convert recno
+   pages of non-native byte order.
+
+
+5.  Record Internal Pages
+
+   Each entry of a P_RINTERNAL page is 8 bytes:
+
+      +--------------+--------------+
+      | nrecs (u32)  | pgno (u32)   |
+      +--------------+--------------+
+
+   pgno     The child page.
+
+   nrecs    Number of records in the subtree of pgno.
+
+   To find record r (0 based), a reader walks from the root, skipping
+   entries while r is not less than the sum of their nrecs, and
+   descends into the first entry whose cumulative count exceeds r, or
+   into the last entry of the page.  At the leaf, the record is entry
+   r minus the records skipped.
+
+   Writers of 1.85 do not update the counts on the rightmost path when
+   appending records; the counts there MAY be lower than the actual
+   number of records until the page splits.  A reader MUST therefore
+   descend into the last entry whenever no earlier entry covers r,
+   without checking its count, and MUST NOT rely on the sum of the
+   root's counts as the number of records; the meta-data nrecs field
+   is authoritative.
+
+
+6.  Record Leaf Pages
+
+   Each entry of a P_RLEAF page is one record:
+
+      +--------------+-----------+------------------------+
+      | dsize (u32)  | flags (u8)| data (dsize)           |
+      +--------------+-----------+------------------------+
+
+   occupying LALIGN(5 + dsize) bytes.
+
+   flags    0x01 P_BIGDATA if the data is on overflow pages; data then
+            holds an 8 byte overflow reference and dsize is 8.
+
+   Leaf pages are linked through prevpg and nextpg in record order.
+   Pages emptied by deletes are not removed from the tree.
+
+   A record moves to overflow pages if its length exceeds
+
+      ovflsize = (psize - 20) / 2 - (2 + LALIGN(9))
+
+
+7.  Record Numbers
+
+   Record numbers are 1 based.  In the programming interface a key is
+   the record number as a u32 in the byte order of the host.
+
+   Storing record n when the database holds fewer than n - 1 records
+   creates the missing records empty, or, for fixed length records,
+   filled with bval.
+
+   Inserting after record n (R_IAFTER) creates record n + 1, inserting
+   before record n (R_IBEFORE) creates record n.  The 1.85
+   implementation reports n as the number of a record inserted after
+   n; later implementations, including the Go one, report n + 1.
+
+
+8.  Synchronization
+
+   On synchronization a writer first reads any records of the flat file
+   not yet in the tree, then rewrites the flat file from the start with
+   all records in order, each followed by the delimiter for variable
+   length records, and truncates the file to the written length.  A
+   flat file opened read-only, or read from a pipe, is never written.
+
+   Records are read from the flat file lazily; a writer MUST read all
+   remaining records before rewriting it.  If a persistent tree file is
+   combined with a flat file, the tree is assumed to hold the first
+   nrecs records already; records of the flat file are appended after
+   them as they are read.  Applications SHOULD NOT combine both.
+
+
+9.  Constants
+
+      R_RECNO meta flag         0x00000080
+      P_RINTERNAL               0x08
+      P_RLEAF                   0x10
+      P_BIGDATA                 0x01
+      RINTERNAL entry size      8
+      default bval              0x0A without parameters, else as given
+      first record number       1

@@ -1,0 +1,343 @@
+github.com/dim13/db                                         October 2026
+Category: Informational
+
+
+              Berkeley DB 1.85 Hash File Format
+
+
+Abstract
+
+   This document describes the on-disk format of the hash access method
+   of Berkeley DB 1.85, as created by dbopen(3) with type DB_HASH.  The
+   table uses linear hashing over buckets of one page each, with chains
+   of overflow pages for full buckets and for pairs larger than a page.
+
+Table of Contents
+
+   1.  Conventions
+   2.  Overview
+   3.  Header
+   4.  Page Addressing
+   5.  Page Layout
+   6.  Overflow Chains
+   7.  Big Pairs
+   8.  Overflow Page Bitmaps
+   9.  Hashing and Table Growth
+   10. Creating a Table
+   11. Known Defects of 1.85
+   12. Constants
+
+
+1.  Conventions
+
+   The key words "MUST", "MUST NOT", "SHOULD", "SHOULD NOT" and "MAY"
+   in this document are to be interpreted as described in RFC 2119.
+
+   i32, u16 and u32 denote signed and unsigned integers of 2 and 4
+   bytes.  The header (Section 3) is always big endian.  All other
+   integers are in the byte order recorded in the header field lorder.
+   Key and data bytes are never byte swapped.
+
+   bp[i] denotes the i-th u16 of a page, bp[0] being its first two
+   bytes.  log2(x) is the smallest k with 2^k >= x (rounding up);
+   log2(0) = log2(1) = 0.
+
+
+2.  Overview
+
+   The file is an array of pages of bsize bytes, bsize a power of two.
+   Page n starts at byte n * bsize.  The first hdrpages pages hold the
+   header.  Bucket pages and overflow pages follow, interleaved: after
+   the buckets of each doubling of the table come the overflow pages
+   allocated while the table had that size.
+
+      +--------+----------+----------+------------+----------+---
+      | header | bucket 0 | bucket 1 | ovfl pages | bucket 2 |
+      +--------+----------+----------+------------+----------+---
+
+   Each key hashes to one bucket.  A bucket is a page of key/data
+   pairs, continued on a chain of overflow pages when full.  A pair
+   that does not fit on a page is a "big pair" stored across several
+   overflow pages of the chain.  Bitmap pages track which overflow
+   pages are in use.
+
+
+3.  Header
+
+   The header starts at byte 0 and is 260 bytes long.  All fields are
+   big endian, regardless of lorder.
+
+      offset  type      field       meaning
+      ------  --------  ----------  -----------------------------------
+        0     i32       magic       0x00061561
+        4     i32       version     2 (readers SHOULD accept 1)
+        8     u32       lorder      byte order of pages: 1234 little
+                                    endian, 4321 big endian
+       12     i32       bsize       bucket and page size
+       16     i32       bshift      log2(bsize)
+       20     i32       dsize       directory size (in-memory hint)
+       24     i32       ssize       segment size (in-memory hint)
+       28     i32       sshift      log2(ssize)
+       32     i32       ovfl_point  split point overflow pages are
+                                    currently allocated at
+       36     i32       last_freed  hint: lowest overflow page number
+                                    that may be free
+       40     i32       max_bucket  highest bucket in use
+       44     i32       high_mask   mask into the whole table
+       48     i32       low_mask    mask into the lower half
+       52     i32       ffactor     fill factor, keys per bucket
+       56     i32       nkeys       number of keys
+       60     i32       hdrpages    pages taken by the header
+       64     i32       h_charkey   hash of the check key (Section 9)
+       68     i32[32]   spares      overflow pages per split point
+      196     u16[32]   bitmaps     overflow addresses of bitmap pages
+
+   bsize MUST be a power of two not larger than 65536.  hdrpages is
+
+      hdrpages = ((max(260, 512) - 1) >> bshift) + 1
+
+   so the header takes 512 bytes rounded up to whole pages.
+
+   spares[i] is the total number of overflow pages, bitmap pages
+   included, allocated at split points 0 through i.  Entries above
+   ovfl_point are unused.
+
+   dsize, ssize and sshift size the in-memory bucket directory and do
+   not affect the file layout; readers MAY ignore them.
+
+
+4.  Page Addressing
+
+   Bucket b is stored at page
+
+      BUCKET_TO_PAGE(b) = b + hdrpages + spare(b)
+
+      spare(b) = b > 0 ? spares[log2(b + 1) - 1] : 0
+
+   Overflow pages are named by 16 bit overflow addresses:
+
+        15      11 10                    0
+      +----------+------------------------+
+      |  split   |   page offset (1..)    |
+      +----------+------------------------+
+
+      OADDR(S, O) = S << 11 | O
+
+   The page of overflow address (S, O) is
+
+      OADDR_TO_PAGE(S, O) = BUCKET_TO_PAGE(2^S - 1) + O
+
+   that is, the O-th page after the last bucket of split point S.
+   Offsets start at 1; the offset 2047 is the largest.  An overflow
+   address MUST NOT be 0.
+
+   Each overflow page also has a page number counted across all split
+   points, used by the bitmaps (Section 8):
+
+      N(S, O) = (S > 0 ? spares[S - 1] : 0) + O
+
+
+5.  Page Layout
+
+   Bucket and overflow pages share one layout.  The page starts with a
+   table of u16, items fill the page from the end:
+
+      +----+------+------+-----+------+------+------+------+-------+
+      | n  | k1   | d1   | ... | kN   | dN   | free | off  |  -->  |
+      +----+------+------+-----+------+------+------+------+-------+
+      |                     free space                             |
+      +---------------+---------------+------------+---------------+
+      |  <--  dN      | kN            | ...  d1    | k1            |
+      +---------------+---------------+------------+---------------+
+                                                                 bsize
+
+   bp[0]          n, the number of offset entries; always even.
+
+   bp[i], bp[i+1] for odd i < n: an entry of two u16.
+
+   bp[n+1]        FREESPACE: bytes free between the table and the
+                  items, that is bp[n+2] - 2 * (n + 3).
+
+   bp[n+2]        OFFSET: start of the lowest item.
+
+   If bp[i+1] >= 4 (REAL_KEY), the entry is a regular pair.  The key
+   occupies [bp[i], end) with end = bsize for i = 1, else bp[i-1]; the
+   data occupies [bp[i+1], bp[i]).  Keys and data are not aligned.
+
+   Otherwise bp[i+1] is a type (Sections 6 and 7):
+
+      0  OVFLPAGE       bp[i] is the overflow address of the next page
+      1  PARTIAL_KEY    big pair, key continues on the next page
+      2  FULL_KEY       big pair, key or data continues on next page
+      3  FULL_KEY_DATA  big pair, key complete, data starts here
+
+   Real offsets are never below 8, so the types are unambiguous.
+
+   An empty page has
+
+      bp[0] = 0, bp[1] = bsize - 6, bp[2] = bsize
+
+   A page that is past the end of the file, or has bp[0] = 0, MUST be
+   treated as empty.  Writers MUST NOT place a pair on a page unless
+   the page then still has room for an OVFLPAGE entry (4 bytes).
+
+
+6.  Overflow Chains
+
+   An OVFLPAGE entry MUST be the last entry of a page.  It links the
+   page to the next page of the bucket's chain.  Key lookup searches
+   the bucket page and then each page of its chain in turn.  Regular
+   pairs MAY precede the OVFLPAGE entry; writers MAY later insert a
+   pair before it if it fits.
+
+   Overflow pages emptied by deletes are not freed, except pages of
+   big pairs (Section 7) and pages released when a bucket splits.
+
+
+7.  Big Pairs
+
+   A pair too large for an empty overflow page is a big pair.  It
+   starts at entry 1 of a fresh overflow page and spans a sub-chain of
+   pages, each starting with one entry at index 1:
+
+   o  PARTIAL_KEY page: [4, koff, 1, next, 0].  The key bytes
+      [koff, bsize) continue on page next.
+
+   o  FULL_KEY page following key pages: [4, koff, 2, next, 0].  The
+      key ends with [koff, bsize); all data is on the following pages.
+
+   o  FULL_KEY_DATA page: [4, koff, 3, next, doff].  The key ends with
+      [koff, bsize); data starts with [doff, koff).  If FREESPACE is
+      not 0, the data is complete and next is the page after the pair;
+      if it is 0, the data continues on page next.
+
+   o  Data pages: [4, doff, 2, next, 0] holds data [doff, bsize)
+      continued on page next.  The last data page is [2, doff, 3]
+      holding data [doff, bsize), with FREESPACE of at least 1, or
+      [4, doff, 3, next, 0] if the bucket chain continues at next.
+
+   The page of a pair ends its data exactly when its type is
+   FULL_KEY_DATA and either n = 2, bp[n] = OVFLPAGE, or FREESPACE is
+   not 0.  On that page, if n > 2, bp[3] is the next page of the bucket
+   chain.  Writers MUST keep FREESPACE at least 1 on a page that
+   completes a pair's data, since FREESPACE 0 means "continued".
+
+   Big pairs count as one key each in nkeys.
+
+
+8.  Overflow Page Bitmaps
+
+   A bitmap page is an overflow page holding u32 words in lorder.  Bit
+   j of word w (least significant bit first) stands for overflow page
+   number 32 * w + j + 1 of its range; a set bit means "in use".  Bitmap
+   page i covers page numbers i * bsize * 8 + 1 through
+   (i + 1) * bsize * 8.
+
+   bitmaps[i] holds the overflow address of bitmap page i.  The number
+   of bitmap pages is
+
+      nmaps = (spares[ovfl_point] + bsize * 8 - 1) / (bsize * 8)
+
+   A bitmap page is itself an overflow page; its own bit is set.  Bits
+   for page numbers above spares[ovfl_point] are set too, so a clear
+   bit marks a free page: one freed, or reserved when the table was
+   created (Section 10).
+
+   To allocate an overflow page a writer SHOULD first take a free page
+   from the bitmaps, starting at last_freed, then grow: increment
+   spares[ovfl_point] and use offset spares[ovfl_point] -
+   spares[ovfl_point - 1].  If the offset would exceed 2047, the next
+   split point is used.  If a new bitmap page is needed, it takes the
+   next overflow page itself.  The table is full when all 32 split
+   points are used.
+
+
+9.  Hashing and Table Growth
+
+   The hash function maps a key to a u32.  The default is
+
+      h = 0
+      for each byte c: h = h * 33 + c       (modulo 2^32)
+
+   The hash function is not recorded in the file.  Instead h_charkey
+   holds the hash of the 12 bytes "%$sniglet^&" followed by NUL.  A
+   reader MUST reject a file whose h_charkey differs from the hash of
+   that string under its hash function.
+
+   A key with hash h belongs to bucket
+
+      b = h & high_mask
+      if b > max_bucket: b = b & low_mask
+
+   The table grows by one bucket at a time (linear hashing).  It grows
+   after an insert that either made nkeys / (max_bucket + 1) exceed
+   ffactor, or needed a new overflow page:
+
+      new = ++max_bucket
+      old = new & low_mask
+      if log2(max_bucket + 1) > ovfl_point:
+         spares[log2(max_bucket + 1)] = spares[ovfl_point]
+         ovfl_point = log2(max_bucket + 1)
+      if new > high_mask:
+         low_mask = high_mask
+         high_mask = new | low_mask
+
+   Then every pair of bucket old whose hash now maps to new moves to
+   bucket new; overflow pages of the old chain are rebuilt and freed.
+
+   If ffactor is 65536 when the first overflow page is added, it is
+   replaced by half the number of entries on the full page, at least 4.
+
+
+10. Creating a Table
+
+   Given nelem expected keys (default 1) and ffactor:
+
+      l2 = log2(max((nelem - 1) / ffactor + 1, 2))
+      max_bucket = low_mask = 2^l2 - 1
+      high_mask = 2^(l2 + 1) - 1
+      spares[l2] = spares[l2 + 1] = l2 + 1
+      ovfl_point = l2
+      last_freed = 2
+
+   The first bitmap page is overflow address OADDR(l2, 1), with only
+   bit 0 (itself) in use among the first l2 + 1 page numbers.  All
+   buckets start empty and are written on first use.
+
+
+11. Known Defects of 1.85
+
+   The following defects of the C implementation affect files and are
+   avoided by the Go implementation:
+
+   o  A pair could be squeezed in front of the OVFLPAGE entry of the
+      last page of a big pair, making the pair unreadable.  Writers
+      MUST NOT place regular pairs on big pair pages (fixed in 1.86).
+
+   o  When a big key ended on a page and the data filled the rest of it
+      exactly, FREESPACE was 0, which reads as "continued".  Such data
+      is now moved to the next page.
+
+   o  A freed overflow page at offset 2047 was never reused.
+
+   o  Squeezing a pair before an OVFLPAGE entry did not mark the page
+      modified or count the key.
+
+
+12. Constants
+
+      magic                0x00061561
+      version              2
+      header size          260 (512 reserved)
+      default bsize        file system block size (Go: 4096)
+      max bsize            65536
+      default ffactor      65536 (dynamic)
+      min ffactor          4
+      split points         32
+      max page offset      2047 (11 bits)
+      REAL_KEY             4
+      OVFLPAGE             0
+      PARTIAL_KEY          1
+      FULL_KEY             2
+      FULL_KEY_DATA        3
+      check key            "%$sniglet^&\0" (12 bytes)

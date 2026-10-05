@@ -14,6 +14,9 @@ for k, v, err := d.Seq(nil, db.RFirst); err == nil; k, v, err = d.Seq(nil, db.RN
 }
 ```
 
+File formats are described in [doc/btree.txt](doc/btree.txt),
+[doc/hash.txt](doc/hash.txt) and [doc/recno.txt](doc/recno.txt).
+
 Differences to the C implementation:
 
 - Pages are cached in memory until `Close`, no cache size limit.
