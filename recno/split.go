@@ -68,7 +68,7 @@ func (t *tree) split(sp page, data []byte, flags byte, ilen, skip int) error {
 		// Insert the record counts into the parent page.
 		var nl, nr uint32
 		if rchild.isType(pRInternal) {
-			nl, nr = recTotal(lchild), recTotal(rchild)
+			nl, nr = pageTotal(lchild), pageTotal(rchild)
 		} else {
 			nl, nr = uint32(lchild.nextIndex()), uint32(rchild.nextIndex())
 		}
@@ -172,7 +172,7 @@ func (t *tree) rroot(h, l, r page) {
 		if p.isType(pRLeaf) {
 			return uint32(p.nextIndex())
 		}
-		return recTotal(p)
+		return pageTotal(p)
 	}
 	h.setUpper(t.psize - nrInternal)
 	h.setLinp(0, h.upper())
@@ -275,8 +275,8 @@ func (t *tree) psplit(h, l, r page, pskip *int, ilen int) (left bool, err error)
 	return left, nil
 }
 
-// recTotal returns the number of recno entries below a page
-func recTotal(h page) uint32 {
+// pageTotal returns the number of recno entries below a page
+func pageTotal(h page) uint32 {
 	var recs uint32
 	for i := range h.nextIndex() {
 		recs += h.rinternal(i).nrecs

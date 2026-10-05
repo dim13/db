@@ -122,7 +122,9 @@ const (
 )
 
 // New opens a hash table backed by file, or an in-memory table if file is
-// nil.  An empty file is initialized as a new table.
+// nil.  An empty file is initialized as a new table.  Changes are kept in
+// memory until Sync or Close, so the caller must Close the table, which
+// also closes file.
 func New(file *os.File, info *Info) (*DB, error) {
 	h := &DB{
 		file:    file,
@@ -154,18 +156,18 @@ func New(file *os.File, info *Info) (*DB, error) {
 		h.hash = info.Hash()
 	}
 	if err := binary.Read(io.NewSectionReader(file, 0, hdrSize), binary.BigEndian, &h.hdr); err != nil {
-		return nil, fmt.Errorf("header: %w", db.ErrFormat)
+		return nil, fmt.Errorf("%w: header", db.ErrFormat)
 	}
 	hdr := &h.hdr
 	if hdr.Magic != magic || (hdr.Version != version && hdr.Version != oldVersion) {
-		return nil, fmt.Errorf("magic: %w", db.ErrFormat)
+		return nil, fmt.Errorf("%w: magic", db.ErrFormat)
 	}
 	if int32(h.sum([]byte(charKey))) != hdr.HCharkey {
-		return nil, fmt.Errorf("hash function: %w", db.ErrFormat)
+		return nil, fmt.Errorf("%w: hash function", db.ErrFormat)
 	}
 	if hdr.BSize <= 0 || hdr.BSize > maxBSize || 1<<hdr.BShift != hdr.BSize ||
 		hdr.SSize <= 0 || hdr.OvflPoint < 0 || hdr.OvflPoint >= nCached {
-		return nil, fmt.Errorf("header: %w", db.ErrFormat)
+		return nil, fmt.Errorf("%w: header", db.ErrFormat)
 	}
 	switch hdr.ByteOrder {
 	case littleEndian:
@@ -173,7 +175,7 @@ func New(file *os.File, info *Info) (*DB, error) {
 	case bigEndian:
 		h.o = binary.BigEndian
 	default:
-		return nil, fmt.Errorf("byte order %d: %w", hdr.ByteOrder, db.ErrFormat)
+		return nil, fmt.Errorf("%w: byte order %d", db.ErrFormat, hdr.ByteOrder)
 	}
 	// Max_Bucket is the maximum bucket number, so the number of buckets
 	// is max_bucket + 1.
@@ -199,7 +201,7 @@ func (h *DB) initHash(info *Info) error {
 			hdr.BShift = int32(log2(uint32(info.BucketSize)))
 			hdr.BSize = 1 << hdr.BShift
 			if hdr.BSize > maxBSize {
-				return fmt.Errorf("bucket size %d: %w", info.BucketSize, db.ErrInvalid)
+				return fmt.Errorf("%w: bucket size %d", db.ErrInvalid, info.BucketSize)
 			}
 		}
 		if info.FillFactor != 0 {

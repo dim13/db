@@ -104,19 +104,21 @@ func validPSize(n int) bool {
 }
 
 // New opens a btree backed by file, or an in-memory tree if file is nil.
-// An empty file is initialized as a new tree.
+// An empty file is initialized as a new tree.  Changes are kept in memory
+// until Sync or Close, so the caller must Close the tree, which also closes
+// file.
 func New(file *os.File, info *Info) (*DB, error) {
 	var b Info
 	if info != nil {
 		b = *info
 		if b.Flags&^RDup != 0 {
-			return nil, fmt.Errorf("flags %#x: %w", b.Flags, db.ErrInvalid)
+			return nil, fmt.Errorf("%w: flags %#x", db.ErrInvalid, b.Flags)
 		}
 		if b.PageSize != 0 && !validPSize(b.PageSize) {
-			return nil, fmt.Errorf("page size %d: %w", b.PageSize, db.ErrInvalid)
+			return nil, fmt.Errorf("%w: page size %d", db.ErrInvalid, b.PageSize)
 		}
 		if b.MinKeysPerPage != 0 && b.MinKeysPerPage < 2 {
-			return nil, fmt.Errorf("min keys per page %d: %w", b.MinKeysPerPage, db.ErrInvalid)
+			return nil, fmt.Errorf("%w: min keys per page %d", db.ErrInvalid, b.MinKeysPerPage)
 		}
 	}
 	if b.MinKeysPerPage == 0 {
@@ -159,7 +161,7 @@ func New(file *os.File, info *Info) (*DB, error) {
 	if size > 0 {
 		m := make([]byte, 24)
 		if _, err := file.ReadAt(m, 0); err != nil {
-			return nil, fmt.Errorf("meta: %w", db.ErrFormat)
+			return nil, fmt.Errorf("%w: meta", db.ErrFormat)
 		}
 		switch {
 		case binary.LittleEndian.Uint32(m) == magic:
@@ -167,13 +169,13 @@ func New(file *os.File, info *Info) (*DB, error) {
 		case binary.BigEndian.Uint32(m) == magic:
 			t.o = binary.BigEndian
 		default:
-			return nil, fmt.Errorf("magic: %w", db.ErrFormat)
+			return nil, fmt.Errorf("%w: magic", db.ErrFormat)
 		}
 		mv := page{b: m, o: t.o}
 		psize, flags := int(mv.u32(8)), mv.u32(20)
 		// recno trees are not btrees
 		if mv.u32(4) != version || !validPSize(psize) || flags&^bNoDups != 0 {
-			return nil, fmt.Errorf("meta: %w", db.ErrFormat)
+			return nil, fmt.Errorf("%w: meta", db.ErrFormat)
 		}
 		b.PageSize = psize
 		t.flags |= flags
@@ -191,8 +193,8 @@ func New(file *os.File, info *Info) (*DB, error) {
 	t.psize = b.PageSize
 
 	t.ovflsize = (t.psize-dataOff)/b.MinKeysPerPage - (2 + nbleafdbt(0, 0))
-	if min := nbleafdbt(novflSize, novflSize) + 2; t.ovflsize < min {
-		t.ovflsize = min
+	if minSize := nbleafdbt(novflSize, novflSize) + 2; t.ovflsize < minSize {
+		t.ovflsize = minSize
 	}
 
 	t.mp = newMpool(file, t.psize, size)
@@ -212,7 +214,7 @@ func (t *DB) nroot() error {
 	t.mp.new() // meta
 	npg, b := t.mp.new()
 	if npg != pRoot {
-		return fmt.Errorf("root page %d: %w", npg, db.ErrFormat)
+		return fmt.Errorf("%w: root page %d", db.ErrFormat, npg)
 	}
 	t.page(b).init(npg, pInvalid, pInvalid, pBLeaf, t.psize)
 	t.flags |= bModified

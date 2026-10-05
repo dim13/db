@@ -26,7 +26,7 @@ const (
 	RSnapshot                  // snapshot the input
 )
 
-// Rec_search operations
+// search operations
 const (
 	sDelete = iota
 	sInsert
@@ -51,7 +51,9 @@ type DB struct {
 }
 
 // New opens a database of the records in a flat text file, or an
-// in-memory one if file is nil.  Records are read from the file as needed.
+// in-memory one if file is nil.  Records are read from the file as needed
+// and written back by Sync or Close, so the caller must Close the
+// database, which also closes file and Info.BTreeFile.
 func New(file *os.File, info *Info) (*DB, error) {
 	var bfile *os.File
 	var psize int
@@ -124,7 +126,7 @@ func New(file *os.File, info *Info) (*DB, error) {
 	return &DB{t: t}, nil
 }
 
-func recKey(key []byte) (uint32, error) {
+func keyNum(key []byte) (uint32, error) {
 	if len(key) != 4 {
 		return 0, db.ErrInvalid
 	}
@@ -160,7 +162,7 @@ func (r *DB) Fd() uintptr {
 // Get returns the record numbered key, or ErrNotFound.
 func (r *DB) Get(key []byte, flag db.Flag) ([]byte, error) {
 	t := r.t
-	nrec, err := recKey(key)
+	nrec, err := keyNum(key)
 	if err != nil {
 		return nil, err
 	}
@@ -178,11 +180,11 @@ func (r *DB) Get(key []byte, flag db.Flag) ([]byte, error) {
 			return nil, err
 		}
 	}
-	e, err := t.recSearch(nrec-1, sSearch)
+	e, err := t.search(nrec-1, sSearch)
 	if err != nil {
 		return nil, err
 	}
-	return t.recData(*e)
+	return t.record(*e)
 }
 
 // Put stores data as record key and returns its record number.  Missing
@@ -213,13 +215,13 @@ func (r *DB) Put(key, data []byte, flag db.Flag) ([]byte, error) {
 		}
 		nrec = t.cursor.rcursor
 	case db.RSetCursor, 0, db.RIBefore:
-		n, err := recKey(key)
+		n, err := keyNum(key)
 		if err != nil || n == 0 {
 			return nil, db.ErrInvalid
 		}
 		nrec = n
 	case db.RIAfter:
-		n, err := recKey(key)
+		n, err := keyNum(key)
 		if err != nil {
 			return nil, err
 		}
@@ -228,7 +230,7 @@ func (r *DB) Put(key, data []byte, flag db.Flag) ([]byte, error) {
 			flag = db.RIBefore
 		}
 	case db.RNoOverwrite:
-		n, err := recKey(key)
+		n, err := keyNum(key)
 		if err != nil || n == 0 {
 			return nil, db.ErrInvalid
 		}
@@ -254,14 +256,14 @@ func (r *DB) Put(key, data []byte, flag db.Flag) ([]byte, error) {
 				empty = bytes.Repeat([]byte{t.bval}, t.reclen)
 			}
 			for nrec > t.nrecs+1 {
-				if err := t.recIput(t.nrecs, empty, 0); err != nil {
+				if err := t.iput(t.nrecs, empty, 0); err != nil {
 					return nil, err
 				}
 			}
 		}
 	}
 
-	if err := t.recIput(nrec-1, data, flag); err != nil {
+	if err := t.iput(nrec-1, data, flag); err != nil {
 		return nil, err
 	}
 	if flag == db.RSetCursor {
@@ -276,8 +278,8 @@ func (r *DB) Put(key, data []byte, flag db.Flag) ([]byte, error) {
 	return binary.NativeEndian.AppendUint32(nil, nrec), nil
 }
 
-// recIput adds a recno item to the tree
-func (t *tree) recIput(nrec uint32, data []byte, flag db.Flag) error {
+// iput adds a recno item to the tree
+func (t *tree) iput(nrec uint32, data []byte, flag db.Flag) error {
 	// If the data won't fit on a page, store it on indirect pages.
 	var dflags byte
 	if len(data) > t.ovflsize {
@@ -292,7 +294,7 @@ func (t *tree) recIput(nrec uint32, data []byte, flag db.Flag) error {
 	if nrec > t.nrecs || flag == db.RIAfter || flag == db.RIBefore {
 		op = sInsert
 	}
-	e, err := t.recSearch(nrec, op)
+	e, err := t.search(nrec, op)
 	if err != nil {
 		return err
 	}
@@ -306,7 +308,7 @@ func (t *tree) recIput(nrec uint32, data []byte, flag db.Flag) error {
 	case db.RIBefore:
 	default:
 		if nrec < t.nrecs {
-			if err := t.recDleaf(h, index); err != nil {
+			if err := t.dleaf(h, index); err != nil {
 				return err
 			}
 		}
@@ -342,14 +344,14 @@ func (r *DB) Del(key []byte, flag db.Flag) error {
 	var err error
 	switch flag {
 	case 0:
-		nrec, kerr := recKey(key)
+		nrec, kerr := keyNum(key)
 		if kerr != nil || nrec == 0 {
 			return db.ErrInvalid
 		}
 		if nrec > t.nrecs {
 			return db.ErrNotFound
 		}
-		err = t.recRdelete(nrec - 1)
+		err = t.rdelete(nrec - 1)
 	case db.RCursor:
 		if t.cursor.flags&cursInit == 0 {
 			return db.ErrInvalid
@@ -357,7 +359,7 @@ func (r *DB) Del(key []byte, flag db.Flag) error {
 		if t.nrecs == 0 {
 			return db.ErrNotFound
 		}
-		if err = t.recRdelete(t.cursor.rcursor - 1); err == nil {
+		if err = t.rdelete(t.cursor.rcursor - 1); err == nil {
 			t.cursor.rcursor--
 		}
 	default:
@@ -369,21 +371,21 @@ func (r *DB) Del(key []byte, flag db.Flag) error {
 	return err
 }
 
-// recRdelete deletes the data matching the specified key
-func (t *tree) recRdelete(nrec uint32) error {
-	e, err := t.recSearch(nrec, sDelete)
+// rdelete deletes the data matching the specified key
+func (t *tree) rdelete(nrec uint32) error {
+	e, err := t.search(nrec, sDelete)
 	if err != nil {
 		return err
 	}
-	if err := t.recDleaf(e.page, e.index); err != nil {
+	if err := t.dleaf(e.page, e.index); err != nil {
 		return err
 	}
 	t.dirty(e.page)
 	return nil
 }
 
-// recDleaf deletes a single record from a recno leaf page
-func (t *tree) recDleaf(h page, index int) error {
+// dleaf deletes a single record from a recno leaf page
+func (t *tree) dleaf(h page, index int) error {
 	// Internal records are never deleted from internal pages, regardless
 	// of the records that caused them to be added being deleted.  Pages
 	// made empty by deletion are not reclaimed.
@@ -398,25 +400,25 @@ func (t *tree) recDleaf(h page, index int) error {
 	return nil
 }
 
-// recSearch searches a recno tree for a 0-based record number
-func (t *tree) recSearch(recno uint32, op int) (*epg, error) {
+// search searches a recno tree for a 0-based record number
+func (t *tree) search(nrec uint32, op int) (*epg, error) {
 	t.stack = t.stack[:0]
 	var total uint32
 	for pg := uint32(pRoot); ; {
 		h, err := t.get(pg)
 		if err != nil {
-			t.recUndo(op)
+			t.undo(op)
 			return nil, err
 		}
 		if h.isType(pRLeaf) {
-			t.cur = epg{page: h, index: int(recno - total)}
+			t.cur = epg{page: h, index: int(nrec - total)}
 			return &t.cur, nil
 		}
 		var r rinternal
 		index, top := 0, h.nextIndex()
 		for {
 			r = h.rinternal(index)
-			if index++; index == top || total+r.nrecs > recno {
+			if index++; index == top || total+r.nrecs > nrec {
 				break
 			}
 			total += r.nrecs
@@ -434,8 +436,8 @@ func (t *tree) recSearch(recno uint32, op int) (*epg, error) {
 	}
 }
 
-// recUndo tries to recover the tree after a failed search
-func (t *tree) recUndo(op int) {
+// undo tries to recover the tree after a failed search
+func (t *tree) undo(op int) {
 	if op == sSearch {
 		return
 	}
@@ -459,8 +461,8 @@ func (t *tree) recUndo(op int) {
 	}
 }
 
-// recData returns record data
-func (t *tree) recData(e epg) ([]byte, error) {
+// record returns record data
+func (t *tree) record(e epg) ([]byte, error) {
 	rl := e.page.rleaf(e.index)
 	if rl.flags&pBigData != 0 {
 		return t.ovflGet(rl.data)
@@ -476,7 +478,7 @@ func (r *DB) Seq(key []byte, flag db.Flag) ([]byte, []byte, error) {
 	var nrec uint32
 	switch flag {
 	case db.RCursor:
-		n, err := recKey(key)
+		n, err := keyNum(key)
 		if err != nil || n == 0 {
 			return nil, nil, db.ErrInvalid
 		}
@@ -514,14 +516,14 @@ func (r *DB) Seq(key []byte, flag db.Flag) ([]byte, []byte, error) {
 		}
 	}
 
-	e, err := t.recSearch(nrec-1, sSearch)
+	e, err := t.search(nrec-1, sSearch)
 	if err != nil {
 		return nil, nil, err
 	}
 	t.cursor.flags |= cursInit
 	t.cursor.rcursor = nrec
 
-	data, err := t.recData(*e)
+	data, err := t.record(*e)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -558,11 +560,11 @@ func (r *DB) syncFile() error {
 	w := bufio.NewWriter(io.NewOffsetWriter(t.rfile, 0))
 	var off int64
 	for i := range t.nrecs {
-		e, err := t.recSearch(i, sSearch)
+		e, err := t.search(i, sSearch)
 		if err != nil {
 			return err
 		}
-		data, err := t.recData(*e)
+		data, err := t.record(*e)
 		if err != nil {
 			return err
 		}
@@ -614,7 +616,7 @@ func (t *tree) irec(top uint32) error {
 		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
 			return err
 		}
-		if err := t.recIput(t.nrecs, data, 0); err != nil {
+		if err := t.iput(t.nrecs, data, 0); err != nil {
 			return err
 		}
 	}

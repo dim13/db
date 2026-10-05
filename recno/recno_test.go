@@ -184,7 +184,17 @@ func TestLibc(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer d.Close()
-	dbtest.Compare(t, dbtest.Dump(t, d, true), dbtest.ReadDump(t, "testdata/recno.txt"))
+	got, err := dbtest.Dump(d, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := dbtest.ReadDump("testdata/recno.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dbtest.Compare(got, want); err != nil {
+		t.Error(err)
+	}
 }
 
 func TestPutKey(t *testing.T) {
@@ -201,12 +211,12 @@ func TestPutKey(t *testing.T) {
 		flag db.Flag
 		want int
 	}{
-		{"iafter", 1, db.RIAfter, 2},
-		{"ibefore", 2, db.RIBefore, 2},
-		{"iafter0", 0, db.RIAfter, 1},
-		{"skip", 9, 0, 9},
-		{"setcursor", 4, db.RSetCursor, 4},
-		{"cursor", 0, db.RCursor, 4},
+		{name: "iafter", key: 1, flag: db.RIAfter, want: 2},
+		{name: "ibefore", key: 2, flag: db.RIBefore, want: 2},
+		{name: "iafter0", key: 0, flag: db.RIAfter, want: 1},
+		{name: "skip", key: 9, flag: 0, want: 9},
+		{name: "setcursor", key: 4, flag: db.RSetCursor, want: 4},
+		{name: "cursor", key: 0, flag: db.RCursor, want: 4},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -235,7 +245,9 @@ func TestReadOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	k := key(1)
-	dbtest.ReadOnly(t, d, k)
+	if err := dbtest.ReadOnly(d, k); err != nil {
+		t.Error(err)
+	}
 }
 
 func TestZeroInfo(t *testing.T) {

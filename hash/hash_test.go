@@ -59,22 +59,25 @@ func TestModel(t *testing.T) {
 		name string
 		info *Info
 	}{
-		{"default", nil},
-		{"bsize256", &Info{BucketSize: 256}},
-		{"bsize8192", &Info{BucketSize: 8192, FillFactor: 8}},
-		{"fnv", &Info{Hash: fnv.New32a}},
-		{"littleendian", &Info{BucketSize: 512, ByteOrder: binary.LittleEndian}},
+		{name: "default", info: nil},
+		{name: "bsize256", info: &Info{BucketSize: 256}},
+		{name: "bsize8192", info: &Info{BucketSize: 8192, FillFactor: 8}},
+		{name: "fnv", info: &Info{Hash: fnv.New32a}},
+		{name: "littleendian", info: &Info{BucketSize: 512, ByteOrder: binary.LittleEndian}},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			name := filepath.Join(t.TempDir(), "test.db")
 			d := open(t, name, tc.info)
-			d = dbtest.Model(t, d, 20000, func(d db.DB) db.DB {
+			d, err := dbtest.Model(d, 20000, func(d db.DB) (db.DB, error) {
 				if err := d.Close(); err != nil {
-					t.Fatal(err)
+					return nil, err
 				}
-				return open(t, name, tc.info)
+				return open(t, name, tc.info), nil
 			})
+			if err != nil {
+				t.Fatal(err)
+			}
 			if err := d.Close(); err != nil {
 				t.Fatal(err)
 			}
@@ -87,7 +90,9 @@ func TestInMemory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dbtest.Model(t, d, 10000, nil)
+	if _, err := dbtest.Model(d, 10000, nil); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // TestLibc reads a database written by libc dbopen(3), see
@@ -103,7 +108,14 @@ func TestLibc(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer d.Close()
-	dbtest.Compare(t, dbtest.Dump(t, d, false), dbtest.Expect(400))
+	got, err := dbtest.Dump(d, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := dbtest.Expect(400)
+	if err := dbtest.Compare(got, want); err != nil {
+		t.Error(err)
+	}
 }
 
 func TestReadOnly(t *testing.T) {
@@ -116,5 +128,7 @@ func TestReadOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	k, _ := dbtest.Gen(1)
-	dbtest.ReadOnly(t, d, k)
+	if err := dbtest.ReadOnly(d, k); err != nil {
+		t.Error(err)
+	}
 }

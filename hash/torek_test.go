@@ -7,16 +7,16 @@ func TestTorek(t *testing.T) {
 		key  string
 		want uint32
 	}{
-		{"", 0},
-		{"A", 65},
-		{"AA", 2210},
-		{"AAA", 72995},
-		{"AAAA", 2408900},
-		{"AAAAA", 79493765},
-		{"AAAAAA", 2623294310},
-		{"AAAAAAA", 669366375},
-		{"AAAAAAAA", 614253960},
-		{"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", 3607767976},
+		{key: "", want: 0},
+		{key: "A", want: 65},
+		{key: "AA", want: 2210},
+		{key: "AAA", want: 72995},
+		{key: "AAAA", want: 2408900},
+		{key: "AAAAA", want: 79493765},
+		{key: "AAAAAA", want: 2623294310},
+		{key: "AAAAAAA", want: 669366375},
+		{key: "AAAAAAAA", want: 614253960},
+		{key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", want: 3607767976},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.key, func(t *testing.T) {

@@ -4,12 +4,12 @@ package dbtest
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"math/rand/v2"
 	"os"
 	"slices"
-	"testing"
 
 	"github.com/dim13/db"
 )
@@ -40,19 +40,16 @@ func sum(b []byte) uint32 {
 }
 
 // Dump returns all records of d as sorted lines in dbtool dump format.
-func Dump(t *testing.T, d db.DB, recno bool) []string {
-	t.Helper()
+func Dump(d db.DB, recno bool) ([]string, error) {
 	var lines []string
-	flag := db.RFirst
-	for {
+	for flag := db.RFirst; ; flag = db.RNext {
 		k, v, err := d.Seq(nil, flag)
-		if err == db.ErrNotFound {
+		if errors.Is(err, db.ErrNotFound) {
 			break
 		}
 		if err != nil {
-			t.Fatal(err)
+			return nil, err
 		}
-		flag = db.RNext
 		var s string
 		if recno {
 			s = fmt.Sprint(binary.NativeEndian.Uint32(k))
@@ -62,15 +59,14 @@ func Dump(t *testing.T, d db.DB, recno bool) []string {
 		lines = append(lines, fmt.Sprintf("%s %d:%08x", s, len(v), sum(v)))
 	}
 	slices.Sort(lines)
-	return lines
+	return lines, nil
 }
 
 // ReadDump reads dbtool dump output from a file.
-func ReadDump(t *testing.T, name string) []string {
-	t.Helper()
+func ReadDump(name string) ([]string, error) {
 	b, err := os.ReadFile(name)
 	if err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
 	lines := bytes.Split(bytes.TrimSpace(b), []byte("\n"))
 	s := make([]string, len(lines))
@@ -78,26 +74,26 @@ func ReadDump(t *testing.T, name string) []string {
 		s[i] = string(l)
 	}
 	slices.Sort(s)
-	return s
+	return s, nil
 }
 
-// Compare reports differences between two dumps.
-func Compare(t *testing.T, got, want []string) {
-	t.Helper()
-	if len(got) != len(want) {
-		t.Errorf("got %d records, want %d", len(got), len(want))
-	}
+// Compare returns the first difference between two dumps.
+func Compare(got, want []string) error {
 	for i := range min(len(got), len(want)) {
 		if got[i] != want[i] {
-			t.Fatalf("record %d: got %q, want %q", i, got[i], want[i])
+			return fmt.Errorf("record %d: got %q, want %q", i, got[i], want[i])
 		}
 	}
+	if len(got) != len(want) {
+		return fmt.Errorf("got %d records, want %d", len(got), len(want))
+	}
+	return nil
 }
 
-// Model runs random operations against d and a map, checking they agree.
-// Reopen, if not nil, closes and reopens the database.
-func Model(t *testing.T, d db.DB, n int, reopen func(db.DB) db.DB) db.DB {
-	t.Helper()
+// Model runs n random operations against d and a map, returning the first
+// disagreement.  Reopen, if not nil, is called four times to close and
+// reopen the database; Model returns the database last in use.
+func Model(d db.DB, n int, reopen func(db.DB) (db.DB, error)) (db.DB, error) {
 	r := rand.New(rand.NewPCG(1, 2))
 	m := make(map[string][]byte)
 	for op := range n {
@@ -109,52 +105,53 @@ func Model(t *testing.T, d db.DB, n int, reopen func(db.DB) db.DB) db.DB {
 		switch r.IntN(4) {
 		case 0, 1:
 			if _, err := d.Put(key, data, 0); err != nil {
-				t.Fatalf("op %d put %d: %v", op, i, err)
+				return d, fmt.Errorf("op %d put %d: %w", op, i, err)
 			}
 			m[string(key)] = data
 		case 2:
 			err := d.Del(key, 0)
 			if _, ok := m[string(key)]; ok != (err == nil) {
-				t.Fatalf("op %d del %d: %v, in model %v", op, i, err, ok)
+				return d, fmt.Errorf("op %d del %d: %v, in model %v", op, i, err, ok)
 			}
 			delete(m, string(key))
 		case 3:
 			got, err := d.Get(key, 0)
 			want, ok := m[string(key)]
 			if ok != (err == nil) || !bytes.Equal(got, want) {
-				t.Fatalf("op %d get %d: %v, in model %v", op, i, err, ok)
+				return d, fmt.Errorf("op %d get %d: %v, in model %v", op, i, err, ok)
 			}
 		}
 		if reopen != nil && op%(n/4) == n/4-1 {
-			d = reopen(d)
+			var err error
+			if d, err = reopen(d); err != nil {
+				return d, fmt.Errorf("op %d reopen: %w", op, err)
+			}
 		}
 	}
 	for k, want := range m {
 		got, err := d.Get([]byte(k), 0)
 		if err != nil || !bytes.Equal(got, want) {
-			t.Fatalf("final get %.20q: %v", k, err)
+			return d, fmt.Errorf("final get %.20q: %v", k, err)
 		}
 	}
 	var seen int
-	flag := db.RFirst
-	for {
+	for flag := db.RFirst; ; flag = db.RNext {
 		k, v, err := d.Seq(nil, flag)
-		if err == db.ErrNotFound {
+		if errors.Is(err, db.ErrNotFound) {
 			break
 		}
 		if err != nil {
-			t.Fatal(err)
+			return d, err
 		}
-		flag = db.RNext
 		if want, ok := m[string(k)]; !ok || !bytes.Equal(v, want) {
-			t.Fatalf("seq %.20q: unexpected", k)
+			return d, fmt.Errorf("seq %.20q: unexpected", k)
 		}
 		seen++
 	}
 	if seen != len(m) {
-		t.Errorf("seq: got %d records, want %d", seen, len(m))
+		return d, fmt.Errorf("seq: got %d records, want %d", seen, len(m))
 	}
-	return d
+	return d, nil
 }
 
 // Expect returns the dump of what dbtool mk writes: n pairs, every 5th
@@ -174,18 +171,18 @@ func Expect(n int) []string {
 
 // ReadOnly checks that d refuses changes, still reads key, and closes
 // cleanly.
-func ReadOnly(t *testing.T, d db.DB, key []byte) {
-	t.Helper()
-	if _, err := d.Put(key, []byte("x"), 0); err != db.ErrReadOnly {
-		t.Errorf("put: got %v, want %v", err, db.ErrReadOnly)
+func ReadOnly(d db.DB, key []byte) error {
+	if _, err := d.Put(key, []byte("x"), 0); !errors.Is(err, db.ErrReadOnly) {
+		return fmt.Errorf("put: got %v, want %v", err, db.ErrReadOnly)
 	}
-	if err := d.Del(key, 0); err != db.ErrReadOnly {
-		t.Errorf("del: got %v, want %v", err, db.ErrReadOnly)
+	if err := d.Del(key, 0); !errors.Is(err, db.ErrReadOnly) {
+		return fmt.Errorf("del: got %v, want %v", err, db.ErrReadOnly)
 	}
 	if _, err := d.Get(key, 0); err != nil {
-		t.Errorf("get: %v", err)
+		return fmt.Errorf("get: %w", err)
 	}
 	if err := d.Close(); err != nil {
-		t.Errorf("close: %v", err)
+		return fmt.Errorf("close: %w", err)
 	}
+	return nil
 }

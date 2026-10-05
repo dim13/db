@@ -85,7 +85,7 @@ func validPSize(n int) bool {
 // openTree opens a btree backed by file, or an in-memory tree if file is nil
 func openTree(file *os.File, psize int, o binary.ByteOrder) (*tree, error) {
 	if psize != 0 && !validPSize(psize) {
-		return nil, fmt.Errorf("page size %d: %w", psize, db.ErrInvalid)
+		return nil, fmt.Errorf("%w: page size %d", db.ErrInvalid, psize)
 	}
 	if o == nil {
 		o = binary.NativeEndian
@@ -109,7 +109,7 @@ func openTree(file *os.File, psize int, o binary.ByteOrder) (*tree, error) {
 	if size > 0 {
 		m := make([]byte, 24)
 		if _, err := file.ReadAt(m, 0); err != nil {
-			return nil, fmt.Errorf("meta: %w", db.ErrFormat)
+			return nil, fmt.Errorf("%w: meta", db.ErrFormat)
 		}
 		switch {
 		case binary.LittleEndian.Uint32(m) == magic:
@@ -117,13 +117,13 @@ func openTree(file *os.File, psize int, o binary.ByteOrder) (*tree, error) {
 		case binary.BigEndian.Uint32(m) == magic:
 			t.o = binary.BigEndian
 		default:
-			return nil, fmt.Errorf("magic: %w", db.ErrFormat)
+			return nil, fmt.Errorf("%w: magic", db.ErrFormat)
 		}
 		mv := page{b: m, o: t.o}
 		var flags uint32
 		psize, flags = int(mv.u32(8)), mv.u32(20)
 		if mv.u32(4) != version || !validPSize(psize) || flags&^saveMeta != 0 {
-			return nil, fmt.Errorf("meta: %w", db.ErrFormat)
+			return nil, fmt.Errorf("%w: meta", db.ErrFormat)
 		}
 		t.flags |= flags
 		t.free = mv.u32(12)
@@ -139,8 +139,8 @@ func openTree(file *os.File, psize int, o binary.ByteOrder) (*tree, error) {
 
 	// Same cut-off as btree with two keys per page.
 	t.ovflsize = (t.psize-dataOff)/defMinKeyPage - (2 + lalign(9))
-	if min := lalign(9+2*novflSize) + 2; t.ovflsize < min {
-		t.ovflsize = min
+	if minSize := lalign(9+2*novflSize) + 2; t.ovflsize < minSize {
+		t.ovflsize = minSize
 	}
 
 	t.mp = newMpool(file, t.psize, size)
@@ -160,7 +160,7 @@ func (t *tree) nroot() error {
 	t.mp.new() // meta
 	npg, b := t.mp.new()
 	if npg != pRoot {
-		return fmt.Errorf("root page %d: %w", npg, db.ErrFormat)
+		return fmt.Errorf("%w: root page %d", db.ErrFormat, npg)
 	}
 	t.page(b).init(npg, pInvalid, pInvalid, pBLeaf, t.psize)
 	t.flags |= bModified

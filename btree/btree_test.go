@@ -29,20 +29,23 @@ func TestModel(t *testing.T) {
 		name string
 		info *Info
 	}{
-		{"default", nil},
-		{"psize512", &Info{PageSize: 512}},
-		{"bigendian", &Info{PageSize: 1024, ByteOrder: binary.BigEndian}},
+		{name: "default"},
+		{name: "psize512", info: &Info{PageSize: 512}},
+		{name: "bigendian", info: &Info{PageSize: 1024, ByteOrder: binary.BigEndian}},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			name := filepath.Join(t.TempDir(), "test.db")
 			d := open(t, name, tc.info)
-			d = dbtest.Model(t, d, 20000, func(d db.DB) db.DB {
+			d, err := dbtest.Model(d, 20000, func(d db.DB) (db.DB, error) {
 				if err := d.Close(); err != nil {
-					t.Fatal(err)
+					return nil, err
 				}
-				return open(t, name, nil)
+				return open(t, name, nil), nil
 			})
+			if err != nil {
+				t.Fatal(err)
+			}
 			if err := d.Close(); err != nil {
 				t.Fatal(err)
 			}
@@ -55,7 +58,9 @@ func TestInMemory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dbtest.Model(t, d, 10000, nil)
+	if _, err := dbtest.Model(d, 10000, nil); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestDup(t *testing.T) {
@@ -141,7 +146,17 @@ func TestLibc(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer d.Close()
-	dbtest.Compare(t, dbtest.Dump(t, d, false), dbtest.ReadDump(t, "testdata/btree.txt"))
+	got, err := dbtest.Dump(d, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := dbtest.ReadDump("testdata/btree.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dbtest.Compare(got, want); err != nil {
+		t.Error(err)
+	}
 }
 
 func TestPutKey(t *testing.T) {
@@ -162,5 +177,7 @@ func TestReadOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	k, _ := dbtest.Gen(3) // libc misplaced keys 1, 2 next to big key 0
-	dbtest.ReadOnly(t, d, k)
+	if err := dbtest.ReadOnly(d, k); err != nil {
+		t.Error(err)
+	}
 }
