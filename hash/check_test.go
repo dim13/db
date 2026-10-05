@@ -16,7 +16,7 @@ import (
 func (h *Hash) check() error {
 	seen := map[int]string{}
 	var keys int
-	for b := 0; b <= int(h.hdr.MaxBucket); b++ {
+	for b := range int(h.hdr.MaxBucket) + 1 {
 		bufp, err := h.getBuf(b, nil, false)
 		if err != nil {
 			return err
