@@ -225,7 +225,6 @@ func (h *Hash) uglySplit(obucket int, oldp, newp *buf, copyto, moved int) error 
 				return err
 			}
 			ino = h.page(bufp.page)
-			n = 1
 			scopyto = bsize
 			moved = 0
 			if lastBfp != nil {

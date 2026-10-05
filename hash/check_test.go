@@ -129,36 +129,3 @@ func TestStress(t *testing.T) {
 		}
 	}
 }
-
-func (h *Hash) dumpChain(b int) string {
-	s := ""
-	bufp, _ := h.getBuf(b, nil, false)
-	for k := 0; k < 40; k++ {
-		bp := h.page(bufp.page)
-		n := bp.at(0)
-		var e []int
-		for i := 0; i <= n+2; i++ {
-			e = append(e, bp.at(i))
-		}
-		s += fmt.Sprintf("  addr=%#x %v\n", bufp.addr, e)
-		next := 0
-		if n >= 2 {
-			if bp.at(n) == ovflPage {
-				next = bp.at(n - 1)
-			} else if bp.at(2) < realKey && bp.at(2) != ovflPage {
-				if bp.at(2) == fullKeyData && (n == 2 || bp.freespace() != 0) {
-					if n > 2 {
-						next = bp.at(3)
-					}
-				} else {
-					next = bp.at(n - 1)
-				}
-			}
-		}
-		if next == 0 {
-			break
-		}
-		bufp, _ = h.getBuf(next, bufp, false)
-	}
-	return s
-}

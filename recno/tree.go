@@ -59,7 +59,6 @@ type tree struct {
 	cur      epg
 	cursor   cursor
 	stack    []epgno
-	leaf     uint32 // leaf page the stack leads to
 	free     uint32 // next free page
 	psize    int
 	ovflsize int // cut-off for key/data overflow
