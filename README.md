@@ -14,6 +14,8 @@ the standard library.
 | [btree](https://pkg.go.dev/github.com/dim13/db/btree) | sorted keys, optional duplicates |
 | [hash](https://pkg.go.dev/github.com/dim13/db/hash) | linear hashing |
 | [recno](https://pkg.go.dev/github.com/dim13/db/recno) | records of a flat text file by number |
+| [ndbm](https://pkg.go.dev/github.com/dim13/db/ndbm) | `ndbm(3)` interface on hash |
+| [hsearch](https://pkg.go.dev/github.com/dim13/db/hsearch) | `hsearch(3)` in-memory table on hash |
 
 Each package has a `New(file, info)` returning a `*DB` that implements
 `db.DB`.  A nil file gives an in-memory database, an empty file a new
@@ -51,7 +53,9 @@ File formats are described in [doc/btree.txt](doc/btree.txt),
 
 ## Differences to the C implementation
 
-- Pages are cached in memory until `Close`, no cache size limit.
+- Pages are cached in an LRU cache of `Info.CacheSize` bytes (default
+  1 MiB), evicted between operations only.  In-memory databases are not
+  spilled to a temporary file, their cache is unbounded.
 - Read-only mode is set by `Info.ReadOnly`, not detected from the file.
 - `Put` returns the key it stored under; recno returns the new record
   number, also for `R_IAFTER`, as later C versions do.
@@ -64,4 +68,4 @@ File formats are described in [doc/btree.txt](doc/btree.txt),
   onto a big pair tail, overflow page 2047 never reused.
 - Non-native byte order btrees written by C with overflow data but inline
   key are not readable (C's `bt_conv.c` swaps the wrong bytes there).
-- `ndbm` and `hsearch` compatibility interfaces are not implemented.
+- `hsearch` is a value type (`hsearch.Table`) instead of one global table.
