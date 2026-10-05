@@ -48,7 +48,7 @@ func (t *tree) split(sp page, data []byte, flags byte, ilen, skip int) error {
 		nbytes := nrInternal
 
 		// Split the parent page if necessary or shift the indices.
-		parentsplit := false
+		var parentsplit bool
 		if h.upper()-h.lower() < nbytes+2 {
 			sp = h
 			if h.pgno() == pRoot {
@@ -174,9 +174,9 @@ func (t *tree) psplit(h, l, r page, pskip *int, ilen int) page {
 	skip := *pskip
 	full := t.psize - dataOff
 	half := full / 2
-	used := 0
+	var used int
 	top := h.nextIndex()
-	nxt, off := 0, 0
+	var nxt, off int
 	for ; nxt < top; off++ {
 		// Unlike 1.85, always leave the last entry to the right page.
 		remain := top - nxt

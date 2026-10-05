@@ -135,7 +135,7 @@ func Model(t *testing.T, d db.DB, n int, reopen func(db.DB) db.DB) db.DB {
 			t.Fatalf("final get %.20q: %v", k, err)
 		}
 	}
-	seen := 0
+	var seen int
 	flag := uint(db.RFirst)
 	for {
 		k, v, err := d.Seq(nil, flag)

@@ -464,7 +464,7 @@ func (h *Hash) access(action int, key, val []byte) ([]byte, error) {
 
 	bp := h.page(rbufp.page)
 	ndx, n := 1, bp.at(0)
-	found := false
+	var found bool
 	for ndx < n {
 		switch {
 		case bp.at(ndx+1) >= realKey:

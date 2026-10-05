@@ -80,7 +80,7 @@ func TestDup(t *testing.T) {
 	}
 	d.Seq([]byte("b"), db.RCursor)
 	// delete every other b through the cursor
-	n := 0
+	var n int
 	for err == nil && string(k) == "b" {
 		if n%2 == 0 {
 			if err := d.Del(nil, db.RCursor); err != nil {

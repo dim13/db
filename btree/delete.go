@@ -150,7 +150,7 @@ func (t *BTree) stkacq(key []byte, pgno uint32) (page, error) {
 
 // bdelete deletes all key/data pairs matching the specified key
 func (t *BTree) bdelete(key []byte) error {
-	deleted := false
+	var deleted bool
 	for {
 		// Find any matching record.
 		e, exact, err := t.search(key)
@@ -170,7 +170,7 @@ func (t *BTree) bdelete(key []byte) error {
 		// Delete forward, then delete backward, from the found key.  If
 		// there are duplicates and we reach either side of the page, do
 		// the key search again, so that we get them all.
-		redo := false
+		var redo bool
 		h := e.page
 		for {
 			if err := t.dleaf(key, h, e.index); err != nil {
@@ -340,7 +340,7 @@ func (t *BTree) curdel(key []byte, h page, index int) error {
 	c := &t.cursor
 	c.flags &^= cursAfter | cursBefore | cursAcquire
 
-	curcopy := false
+	var curcopy bool
 	if t.flags&bNoDups == 0 {
 		// We're going to have to do comparisons.  If we weren't
 		// provided a copy of the key, i.e. the user is deleting

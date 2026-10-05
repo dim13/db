@@ -473,8 +473,8 @@ func (t *BTree) search(key []byte) (*epg, bool, error) {
 		}
 		t.cur.page = h
 		t.leaf = pg
-		base, index := 0, 0
-		found := false
+		var base, index int
+		var found bool
 		for lim := h.nextIndex(); lim != 0; lim >>= 1 {
 			index = base + lim>>1
 			t.cur.index = index

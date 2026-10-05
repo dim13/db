@@ -155,7 +155,7 @@ func (h *Hash) splitPage(obucket, nbucket int) error {
 	ino := h.page(oldp.page)
 	op := oldp.page
 	np := h.page(newp.page)
-	moved := 0
+	var moved int
 	for n, ndx := 1, 1; n < ino.at(0); n += 2 {
 		if ino.at(n+1) < realKey {
 			return h.uglySplit(obucket, oldp, newp, copyto, moved)
@@ -270,9 +270,9 @@ func (h *Hash) uglySplit(obucket int, oldp, newp *buf, copyto, moved int) error 
 // addel adds the given pair to the page
 func (h *Hash) addel(bufp *buf, key, val []byte) error {
 	bp := h.page(bufp.page)
-	doExpand := false
+	var doExpand bool
 	var err error
-	squeezed := false
+	var squeezed bool
 	for bp.at(0) != 0 && (bp.at(2) < realKey || bp.at(bp.at(0)) < realKey) {
 		if bp.at(2) == fullKeyData && bp.at(0) == 2 {
 			// This is the last page of a big key/data pair
@@ -453,7 +453,7 @@ func (h *Hash) overflowPage() (int, error) {
 		if i == freePage {
 			inUseBits = freeBit
 		}
-		bit, j := 0, 0
+		var bit, j int
 		if i == firstPage {
 			bit = int(hdr.LastFreed) & mask
 			j = bit / bitsPerMap

@@ -90,7 +90,7 @@ func (h *Hash) bigDelete(bufp *buf) error {
 	rbufp := bufp
 	var lastBfp *buf
 	bp := h.page(bufp.page)
-	keyDone := false
+	var keyDone bool
 	var err error
 	for !keyDone || bp.at(2) != fullKeyData {
 		if bp.at(2) == fullKey || bp.at(2) == fullKeyData {

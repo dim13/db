@@ -15,21 +15,21 @@ import (
 // once, allocated, and keys counted match NKeys
 func (h *Hash) check() error {
 	seen := map[int]string{}
-	keys := 0
+	var keys int
 	for b := 0; b <= int(h.hdr.MaxBucket); b++ {
 		bufp, err := h.getBuf(b, nil, false)
 		if err != nil {
 			return err
 		}
 		where := fmt.Sprintf("bucket %d", b)
-		inBig := false
+		var inBig bool
 		for {
 			bp := h.page(bufp.page)
 			n := bp.at(0)
 			if n%2 != 0 {
 				return fmt.Errorf("%s: odd n=%d", where, n)
 			}
-			next := 0
+			var next int
 			if !inBig && n > 0 && bp.at(2) < realKey && bp.at(2) != ovflPage {
 				keys++
 				inBig = true
@@ -95,7 +95,7 @@ func TestStress(t *testing.T) {
 		if r.IntN(3) == 0 {
 			data = data[:len(data)/2]
 		}
-		desc := ""
+		var desc string
 		func() {
 			defer func() {
 				if e := recover(); e != nil {

@@ -24,7 +24,7 @@ func TestStress(t *testing.T) {
 		if r.IntN(3) == 0 {
 			data = data[:len(data)/2]
 		}
-		desc := ""
+		var desc string
 		func() {
 			defer func() {
 				if e := recover(); e != nil {

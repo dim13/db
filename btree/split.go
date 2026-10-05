@@ -78,7 +78,7 @@ func (t *BTree) split(sp page, key, data []byte, flags byte, ilen, skip int) err
 		}
 
 		// Split the parent page if necessary or shift the indices.
-		parentsplit := false
+		var parentsplit bool
 		if h.upper()-h.lower() < nbytes+2 {
 			sp = h
 			if h.pgno() == pRoot {
@@ -226,13 +226,13 @@ func (t *BTree) psplit(h, l, r page, pskip *int, ilen int) page {
 	// open.  Additionally, make some effort not to split on an overflow
 	// key.  This makes internal page processing faster and can save
 	// space as overflow keys used by internal pages are never deleted.
-	bigkeycnt := 0
+	var bigkeycnt int
 	skip := *pskip
 	full := t.psize - dataOff
 	half := full / 2
-	used := 0
+	var used int
 	top := h.nextIndex()
-	nxt, off := 0, 0
+	var nxt, off int
 	for ; nxt < top; off++ {
 		// Unlike 1.85, always leave the last entry to the right page,
 		// skipping over big keys could empty it otherwise.

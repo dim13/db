@@ -34,7 +34,7 @@ func TestAliases(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer d.Close()
-	n := 0
+	var n int
 	for flag := uint(db.RFirst); ; flag = db.RNext {
 		k, v, err := d.Seq(nil, flag)
 		if err == db.ErrNotFound {
