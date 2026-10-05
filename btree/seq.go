@@ -2,8 +2,10 @@ package btree
 
 import "github.com/dim13/db"
 
-// Seq is the btree sequential scan interface
-func (t *BTree) Seq(key []byte, flag uint) ([]byte, []byte, error) {
+// Seq returns the next key/data pair in key order, or ErrNotFound at the
+// end.  RFirst and RLast start at either end, RCursor at the first key not
+// less than key; RNext and RPrev continue the scan.
+func (t *DB) Seq(key []byte, flag uint) ([]byte, []byte, error) {
 	// If scan uninitialized as yet, or starting at a specific record, set
 	// the scan to a specific key.
 	var e epg
@@ -28,7 +30,7 @@ func (t *BTree) Seq(key []byte, flag uint) ([]byte, []byte, error) {
 }
 
 // seqset sets the sequential scan to a specific key
-func (t *BTree) seqset(key []byte, flag uint) (epg, error) {
+func (t *DB) seqset(key []byte, flag uint) (epg, error) {
 	switch flag {
 	case db.RCursor:
 		// Find the first instance of the key or the smallest key
@@ -71,7 +73,7 @@ func (t *BTree) seqset(key []byte, flag uint) (epg, error) {
 }
 
 // seqadv advances the sequential scan
-func (t *BTree) seqadv(flag uint) (epg, error) {
+func (t *DB) seqadv(flag uint) (epg, error) {
 	c := &t.cursor
 
 	// The cursor was deleted where there weren't any duplicate records,
@@ -125,7 +127,7 @@ func (t *BTree) seqadv(flag uint) (epg, error) {
 }
 
 // first finds the first entry greater than or equal to key
-func (t *BTree) first(key []byte) (epg, error) {
+func (t *DB) first(key []byte) (epg, error) {
 	ep, exact, err := t.search(key)
 	if err != nil {
 		return epg{}, err
@@ -178,7 +180,7 @@ func (t *BTree) first(key []byte) (epg, error) {
 }
 
 // setcur sets the cursor to an entry in the tree
-func (t *BTree) setcur(pgno uint32, index int) {
+func (t *DB) setcur(pgno uint32, index int) {
 	t.cursor.key = nil
 	t.cursor.flags &^= cursAcquire | cursAfter | cursBefore
 	t.cursor.pg = epgno{pgno: pgno, index: index}

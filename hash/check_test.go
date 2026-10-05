@@ -13,7 +13,7 @@ import (
 
 // check walks all bucket chains verifying overflow pages are referenced
 // once, allocated, and keys counted match NKeys
-func (h *Hash) check() error {
+func (h *DB) check() error {
 	seen := map[int]string{}
 	var keys int
 	for b := range int(h.hdr.MaxBucket) + 1 {

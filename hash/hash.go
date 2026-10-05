@@ -1,4 +1,5 @@
-// Package hash implements Hash type of Berkeley DB 1.85
+// Package hash implements the hash access method of Berkeley DB 1.85,
+// reading and writing files compatible with dbopen(3).
 package hash
 
 import (
@@ -74,7 +75,7 @@ type header struct {
 	Bitmaps   [nCached]uint16 // address of overflow page bitmaps
 }
 
-// Info holds hash open parameters
+// Info holds options for New.  Zero fields and a nil Info select defaults.
 type Info struct {
 	BSize     int                // bucket size
 	FFactor   int                // fill factor
@@ -91,8 +92,8 @@ type buf struct {
 	bucket bool   // bucket page, overflow page otherwise
 }
 
-// Hash is the memory resident hash table
-type Hash struct {
+// DB is an open hash database.  It is not safe for concurrent use.
+type DB struct {
 	file *os.File
 	o    binary.ByteOrder
 	hdr  header
@@ -122,8 +123,8 @@ const (
 
 // New opens a hash table backed by file, or an in-memory table if file is
 // nil.  An empty file is initialized as a new table.
-func New(file *os.File, info *Info) (*Hash, error) {
-	h := &Hash{
+func New(file *os.File, info *Info) (*DB, error) {
+	h := &DB{
 		file:    file,
 		hash:    newTorek(),
 		buckets: make(map[int]*buf),
@@ -181,7 +182,7 @@ func New(file *os.File, info *Info) (*Hash, error) {
 	return h, nil
 }
 
-func (h *Hash) initHash(info *Info) error {
+func (h *DB) initHash(info *Info) error {
 	hdr := &h.hdr
 	nelem := 1
 	hdr.NKeys = 0
@@ -221,7 +222,7 @@ func (h *Hash) initHash(info *Info) error {
 	return h.initHtab(nelem)
 }
 
-func (h *Hash) initHtab(nelem int) error {
+func (h *DB) initHtab(nelem int) error {
 	hdr := &h.hdr
 	// Divide number of elements by the fill factor and determine a
 	// desired number of buckets.  Allocate space for the next greater
@@ -252,8 +253,8 @@ func (h *Hash) initHtab(nelem int) error {
 	return nil
 }
 
-// Close syncs and closes the table
-func (h *Hash) Close() error {
+// Close syncs the table and closes its file.
+func (h *DB) Close() error {
 	if err := h.sync(); err != nil {
 		return err
 	}
@@ -263,23 +264,24 @@ func (h *Hash) Close() error {
 	return nil
 }
 
-// Fd returns file descriptor of the backing file
-func (h *Hash) Fd() uintptr {
+// Fd returns the file descriptor of the backing file, or ^uintptr(0) for
+// an in-memory table.
+func (h *DB) Fd() uintptr {
 	if h.file == nil {
 		return ^uintptr(0)
 	}
 	return h.file.Fd()
 }
 
-// Sync writes modified pages to disk
-func (h *Hash) Sync(flag uint) error {
+// Sync writes all changes to disk, flag must be 0.
+func (h *DB) Sync(flag uint) error {
 	if flag != 0 {
 		return db.ErrInvalid
 	}
 	return h.sync()
 }
 
-func (h *Hash) sync() error {
+func (h *DB) sync() error {
 	if h.file == nil || h.readOnly || !h.modified {
 		return nil
 	}
@@ -300,7 +302,7 @@ func (h *Hash) sync() error {
 	return nil
 }
 
-func (h *Hash) flushMeta() error {
+func (h *DB) flushMeta() error {
 	hdr := &h.hdr
 	hdr.Magic = magic
 	hdr.Version = version
@@ -319,7 +321,7 @@ func (h *Hash) flushMeta() error {
 	return nil
 }
 
-func (h *Hash) bucketToPage(b int) int {
+func (h *DB) bucketToPage(b int) int {
 	pg := b + int(h.hdr.HdrPages)
 	if b != 0 {
 		pg += int(h.hdr.Spares[log2(uint32(b+1))-1])
@@ -327,7 +329,7 @@ func (h *Hash) bucketToPage(b int) int {
 	return pg
 }
 
-func (h *Hash) oaddrToPage(o int) int {
+func (h *DB) oaddrToPage(o int) int {
 	return h.bucketToPage(1<<(o>>splitShift)-1) + o&splitMask
 }
 
@@ -335,7 +337,7 @@ func oaddrOf(s, o int) int {
 	return s<<splitShift + o
 }
 
-func (h *Hash) offset(addr int, bucket bool) int64 {
+func (h *DB) offset(addr int, bucket bool) int64 {
 	pg := h.oaddrToPage(addr)
 	if bucket {
 		pg = h.bucketToPage(addr)
@@ -344,7 +346,7 @@ func (h *Hash) offset(addr int, bucket bool) int64 {
 }
 
 // getPage reads a page from disk, initializing missing or empty pages
-func (h *Hash) getPage(p []byte, addr int, bucket, disk, bitmap bool) error {
+func (h *DB) getPage(p []byte, addr int, bucket, disk, bitmap bool) error {
 	if h.file == nil || !disk {
 		h.pageInit(p)
 		return nil
@@ -366,14 +368,14 @@ func (h *Hash) getPage(p []byte, addr int, bucket, disk, bitmap bool) error {
 	return nil
 }
 
-func (h *Hash) putPage(p []byte, addr int, bucket bool) error {
+func (h *DB) putPage(p []byte, addr int, bucket bool) error {
 	_, err := h.file.WriteAt(p, h.offset(addr, bucket))
 	return err
 }
 
 // getBuf returns buffer for addr; if prev is nil, addr is a bucket index,
 // overflow page address otherwise.  New overflow pages are initialized.
-func (h *Hash) getBuf(addr int, prev *buf, newpage bool) (*buf, error) {
+func (h *DB) getBuf(addr int, prev *buf, newpage bool) (*buf, error) {
 	m := h.buckets
 	if prev != nil {
 		m = h.ovfls
@@ -393,13 +395,13 @@ func (h *Hash) getBuf(addr int, prev *buf, newpage bool) (*buf, error) {
 	return b, nil
 }
 
-func (h *Hash) sum(key []byte) uint32 {
+func (h *DB) sum(key []byte) uint32 {
 	h.hash.Reset()
 	h.hash.Write(key)
 	return h.hash.Sum32()
 }
 
-func (h *Hash) callHash(key []byte) int {
+func (h *DB) callHash(key []byte) int {
 	n := h.sum(key)
 	bucket := n & uint32(h.hdr.HighMask)
 	if bucket > uint32(h.hdr.MaxBucket) {
@@ -408,16 +410,17 @@ func (h *Hash) callHash(key []byte) int {
 	return int(bucket)
 }
 
-// Get gets a record
-func (h *Hash) Get(key []byte, flag uint) ([]byte, error) {
+// Get returns the data stored under key, or ErrNotFound.
+func (h *DB) Get(key []byte, flag uint) ([]byte, error) {
 	if flag != 0 {
 		return nil, db.ErrInvalid
 	}
 	return h.access(actionGet, key, nil)
 }
 
-// Put stores a record and returns its key
-func (h *Hash) Put(key, data []byte, flag uint) ([]byte, error) {
+// Put stores data under key, replacing an existing entry, and returns
+// key.  With RNoOverwrite it returns ErrKeyExist instead of replacing.
+func (h *DB) Put(key, data []byte, flag uint) ([]byte, error) {
 	if h.readOnly {
 		return nil, db.ErrReadOnly
 	}
@@ -435,8 +438,8 @@ func (h *Hash) Put(key, data []byte, flag uint) ([]byte, error) {
 	return key, nil
 }
 
-// Del deletes a record
-func (h *Hash) Del(key []byte, flag uint) error {
+// Del deletes key.  RCursor is accepted, as in C, and deletes key too.
+func (h *DB) Del(key []byte, flag uint) error {
 	if flag != 0 && flag != db.RCursor {
 		return db.ErrInvalid
 	}
@@ -454,7 +457,7 @@ const (
 	actionDelete
 )
 
-func (h *Hash) access(action int, key, val []byte) ([]byte, error) {
+func (h *DB) access(action int, key, val []byte) ([]byte, error) {
 	bsize := int(h.hdr.BSize)
 	off := bsize
 	rbufp, err := h.getBuf(h.callHash(key), nil, false)
@@ -543,8 +546,9 @@ func (h *Hash) access(action int, key, val []byte) ([]byte, error) {
 	}
 }
 
-// Seq returns next key/data pair, the key argument is ignored
-func (h *Hash) Seq(_ []byte, flag uint) ([]byte, []byte, error) {
+// Seq returns the next key/data pair in hash order, or ErrNotFound at the
+// end.  RFirst starts over.  The key argument is ignored.
+func (h *DB) Seq(_ []byte, flag uint) ([]byte, []byte, error) {
 	if flag != 0 && flag != db.RFirst && flag != db.RNext {
 		return nil, nil, db.ErrInvalid
 	}
@@ -610,7 +614,7 @@ func (h *Hash) Seq(_ []byte, flag uint) ([]byte, []byte, error) {
 	return key, data, nil
 }
 
-func (h *Hash) expandTable() error {
+func (h *DB) expandTable() error {
 	hdr := &h.hdr
 	hdr.MaxBucket++
 	newBucket := int(hdr.MaxBucket)

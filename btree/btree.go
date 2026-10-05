@@ -1,4 +1,5 @@
-// Package btree implements BTree type of Berkeley DB 1.85
+// Package btree implements the B-Tree access method of Berkeley DB 1.85,
+// reading and writing files compatible with dbopen(3).
 package btree
 
 import (
@@ -21,7 +22,7 @@ const (
 	defMinKeyPage = 2
 )
 
-// RDup permits duplicate keys
+// RDup permits duplicate keys.
 const RDup = 0x01
 
 // Tree flags; bNoDups is stored on disk
@@ -46,7 +47,7 @@ const (
 	orderForward
 )
 
-// Info holds btree open parameters
+// Info holds options for New.  Zero fields and a nil Info select defaults.
 type Info struct {
 	Flags      uint                  // RDup
 	MinKeyPage int                   // minimum keys per page
@@ -73,8 +74,8 @@ type cursor struct {
 	flags uint8
 }
 
-// BTree is the in-memory btree data structure
-type BTree struct {
+// DB is an open B-Tree database.  It is not safe for concurrent use.
+type DB struct {
 	mp       *mpool
 	o        binary.ByteOrder
 	file     *os.File
@@ -99,7 +100,7 @@ func validPSize(n int) bool {
 
 // New opens a btree backed by file, or an in-memory tree if file is nil.
 // An empty file is initialized as a new tree.
-func New(file *os.File, info *Info) (*BTree, error) {
+func New(file *os.File, info *Info) (*DB, error) {
 	var b Info
 	if info != nil {
 		b = *info
@@ -127,7 +128,7 @@ func New(file *os.File, info *Info) (*BTree, error) {
 		o = binary.NativeEndian
 	}
 
-	t := &BTree{
+	t := &DB{
 		o:     o,
 		file:  file,
 		cmp:   b.Compare,
@@ -197,7 +198,7 @@ func New(file *os.File, info *Info) (*BTree, error) {
 }
 
 // nroot creates the root of a new tree
-func (t *BTree) nroot() error {
+func (t *DB) nroot() error {
 	if _, err := t.mp.get(pMeta); err == nil {
 		return nil
 	} else if !errors.Is(err, db.ErrNoPage) {
@@ -213,24 +214,24 @@ func (t *BTree) nroot() error {
 	return nil
 }
 
-func (t *BTree) page(b []byte) page {
+func (t *DB) page(b []byte) page {
 	return page{b: b, o: t.o}
 }
 
-func (t *BTree) get(pgno uint32) (page, error) {
+func (t *DB) get(pgno uint32) (page, error) {
 	b, err := t.mp.get(pgno)
 	return t.page(b), err
 }
 
-func (t *BTree) dirty(h page) {
+func (t *DB) dirty(h page) {
 	t.mp.dirty(h.pgno())
 }
 
-func (t *BTree) push(pgno uint32, index int) {
+func (t *DB) push(pgno uint32, index int) {
 	t.stack = append(t.stack, epgno{pgno: pgno, index: index})
 }
 
-func (t *BTree) pop() (epgno, bool) {
+func (t *DB) pop() (epgno, bool) {
 	if len(t.stack) == 0 {
 		return epgno{}, false
 	}
@@ -239,8 +240,8 @@ func (t *BTree) pop() (epgno, bool) {
 	return e, true
 }
 
-// Close syncs and closes the tree
-func (t *BTree) Close() error {
+// Close syncs the tree and closes its file.
+func (t *DB) Close() error {
 	if err := t.sync(); err != nil {
 		return err
 	}
@@ -250,23 +251,24 @@ func (t *BTree) Close() error {
 	return nil
 }
 
-// Fd returns file descriptor of the backing file
-func (t *BTree) Fd() uintptr {
+// Fd returns the file descriptor of the backing file, or ^uintptr(0) for
+// an in-memory tree.
+func (t *DB) Fd() uintptr {
 	if t.file == nil {
 		return ^uintptr(0)
 	}
 	return t.file.Fd()
 }
 
-// Sync writes the tree to disk
-func (t *BTree) Sync(flag uint) error {
+// Sync writes all changes to disk, flag must be 0.
+func (t *DB) Sync(flag uint) error {
 	if flag != 0 {
 		return db.ErrInvalid
 	}
 	return t.sync()
 }
 
-func (t *BTree) sync() error {
+func (t *DB) sync() error {
 	if t.flags&(bInMem|bRdOnly) != 0 || t.flags&bModified == 0 {
 		return nil
 	}
@@ -282,7 +284,7 @@ func (t *BTree) sync() error {
 	return nil
 }
 
-func (t *BTree) writeMeta() error {
+func (t *DB) writeMeta() error {
 	b, err := t.mp.get(pMeta)
 	if err != nil {
 		return err
@@ -299,7 +301,7 @@ func (t *BTree) writeMeta() error {
 }
 
 // bfree puts a page on the freelist
-func (t *BTree) bfree(h page) {
+func (t *DB) bfree(h page) {
 	h.setPrevpg(pInvalid)
 	h.setNextpg(t.free)
 	t.free = h.pgno()
@@ -307,7 +309,7 @@ func (t *BTree) bfree(h page) {
 }
 
 // bnew gets a new page, preferably from the freelist
-func (t *BTree) bnew() (uint32, page, error) {
+func (t *DB) bnew() (uint32, page, error) {
 	if t.free != pInvalid {
 		h, err := t.get(t.free)
 		if err != nil {
@@ -323,7 +325,7 @@ func (t *BTree) bnew() (uint32, page, error) {
 }
 
 // ovflGet gets an overflow key/data item
-func (t *BTree) ovflGet(ref []byte) ([]byte, error) {
+func (t *DB) ovflGet(ref []byte) ([]byte, error) {
 	pg := t.o.Uint32(ref)
 	sz := int(t.o.Uint32(ref[4:]))
 	buf := make([]byte, 0, sz)
@@ -342,7 +344,7 @@ func (t *BTree) ovflGet(ref []byte) ([]byte, error) {
 }
 
 // ovflPut stores an overflow key/data item and returns its reference
-func (t *BTree) ovflPut(data []byte) ([]byte, error) {
+func (t *DB) ovflPut(data []byte) ([]byte, error) {
 	plen := t.psize - dataOff
 	var first uint32
 	var last page
@@ -375,7 +377,7 @@ func (t *BTree) ovflPut(data []byte) ([]byte, error) {
 }
 
 // ovflDelete deletes an overflow chain
-func (t *BTree) ovflDelete(ref []byte) error {
+func (t *DB) ovflDelete(ref []byte) error {
 	pg := t.o.Uint32(ref)
 	sz := int(t.o.Uint32(ref[4:]))
 	h, err := t.get(pg)
@@ -400,7 +402,7 @@ func (t *BTree) ovflDelete(ref []byte) error {
 }
 
 // ret builds return key/data pair
-func (t *BTree) ret(e epg, wantKey, wantData bool) (key, data []byte, err error) {
+func (t *DB) ret(e epg, wantKey, wantData bool) (key, data []byte, err error) {
 	bl := e.page.bleaf(e.index)
 	if wantKey {
 		if bl.flags&pBigKey != 0 {
@@ -424,7 +426,7 @@ func (t *BTree) ret(e epg, wantKey, wantData bool) (key, data []byte, err error)
 }
 
 // compare compares a key to a given record
-func (t *BTree) compare(k1 []byte, e epg) (int, error) {
+func (t *DB) compare(k1 []byte, e epg) (int, error) {
 	h := e.page
 	// The left-most key on internal pages, at any level of the tree, is
 	// guaranteed to be less than any user key.
@@ -450,7 +452,7 @@ func (t *BTree) compare(k1 []byte, e epg) (int, error) {
 }
 
 // equal reports if key matches the record
-func (t *BTree) equal(key []byte, e epg) (bool, error) {
+func (t *DB) equal(key []byte, e epg) (bool, error) {
 	cmp, err := t.compare(key, e)
 	return cmp == 0 && err == nil, err
 }
@@ -470,7 +472,7 @@ func defPrefix(a, b []byte) int {
 }
 
 // search searches a btree for a key
-func (t *BTree) search(key []byte) (*epg, bool, error) {
+func (t *DB) search(key []byte) (*epg, bool, error) {
 	t.stack = t.stack[:0]
 	for pg := uint32(pRoot); ; {
 		h, err := t.get(pg)
@@ -534,7 +536,7 @@ func (t *BTree) search(key []byte) (*epg, bool, error) {
 
 // sibling checks for an exact match at index of sibling page pg, -1 for
 // its last index
-func (t *BTree) sibling(pg uint32, index int, key []byte) (bool, error) {
+func (t *DB) sibling(pg uint32, index int, key []byte) (bool, error) {
 	if pg == pInvalid {
 		return false, nil
 	}
@@ -554,8 +556,9 @@ func (t *BTree) sibling(pg uint32, index int, key []byte) (bool, error) {
 	return true, nil
 }
 
-// Get gets a record from the btree
-func (t *BTree) Get(key []byte, flag uint) ([]byte, error) {
+// Get returns the data stored under key, or ErrNotFound.  With duplicates
+// it returns one of them.
+func (t *DB) Get(key []byte, flag uint) ([]byte, error) {
 	if flag != 0 {
 		return nil, db.ErrInvalid
 	}
@@ -570,15 +573,17 @@ func (t *BTree) Get(key []byte, flag uint) ([]byte, error) {
 	return data, err
 }
 
-// Put adds a btree item to the tree and returns its key
-func (t *BTree) Put(key, data []byte, flag uint) ([]byte, error) {
+// Put stores data under key and returns key.  Without RDup it replaces an
+// existing entry; with RNoOverwrite it returns ErrKeyExist instead; with
+// RCursor it replaces the entry at the cursor.
+func (t *DB) Put(key, data []byte, flag uint) ([]byte, error) {
 	if err := t.put(key, data, flag); err != nil {
 		return nil, err
 	}
 	return key, nil
 }
 
-func (t *BTree) put(key, data []byte, flag uint) error {
+func (t *DB) put(key, data []byte, flag uint) error {
 	if t.flags&bRdOnly != 0 {
 		return db.ErrReadOnly
 	}
@@ -702,7 +707,7 @@ func (t *BTree) put(key, data []byte, flag uint) error {
 }
 
 // fast does a quick check for sorted data
-func (t *BTree) fast(skey, key, data []byte) (*epg, bool) {
+func (t *DB) fast(skey, key, data []byte) (*epg, bool) {
 	h, err := t.get(t.last.pgno)
 	if err != nil {
 		t.order = orderNot

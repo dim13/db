@@ -1,4 +1,4 @@
-// Package dbtest holds helpers shared by access method tests
+// Package dbtest holds helpers shared by the access method tests.
 package dbtest
 
 import (
@@ -14,7 +14,7 @@ import (
 	"github.com/dim13/db"
 )
 
-// Gen returns i-th key/data pair, same as testdata/dbtool.c
+// Gen returns the i-th key/data pair, the same as testdata/dbtool.c.
 func Gen(i int) ([]byte, []byte) {
 	dl := (i * 37) % 300
 	if i%97 == 0 {
@@ -39,7 +39,7 @@ func sum(b []byte) uint32 {
 	return h.Sum32()
 }
 
-// Dump returns sorted lines in dbtool dump format
+// Dump returns all records of d as sorted lines in dbtool dump format.
 func Dump(t *testing.T, d db.DB, recno bool) []string {
 	t.Helper()
 	var lines []string
@@ -65,7 +65,7 @@ func Dump(t *testing.T, d db.DB, recno bool) []string {
 	return lines
 }
 
-// ReadDump reads dbtool dump output
+// ReadDump reads dbtool dump output from a file.
 func ReadDump(t *testing.T, name string) []string {
 	t.Helper()
 	b, err := os.ReadFile(name)
@@ -81,7 +81,7 @@ func ReadDump(t *testing.T, name string) []string {
 	return s
 }
 
-// Compare compares dumps
+// Compare reports differences between two dumps.
 func Compare(t *testing.T, got, want []string) {
 	t.Helper()
 	if len(got) != len(want) {
@@ -157,7 +157,8 @@ func Model(t *testing.T, d db.DB, n int, reopen func(db.DB) db.DB) db.DB {
 	return d
 }
 
-// Expect returns dump of what dbtool mk writes: n pairs, every 5th deleted
+// Expect returns the dump of what dbtool mk writes: n pairs, every 5th
+// deleted.
 func Expect(n int) []string {
 	var lines []string
 	for i := range n {
@@ -171,7 +172,8 @@ func Expect(n int) []string {
 	return lines
 }
 
-// ReadOnly checks d refuses changes, still reads key, and closes cleanly
+// ReadOnly checks that d refuses changes, still reads key, and closes
+// cleanly.
 func ReadOnly(t *testing.T, d db.DB, key []byte) {
 	t.Helper()
 	if _, err := d.Put(key, []byte("x"), 0); err != db.ErrReadOnly {

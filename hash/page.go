@@ -32,7 +32,7 @@ type hpage struct {
 	o binary.ByteOrder
 }
 
-func (h *Hash) page(b []byte) hpage {
+func (h *DB) page(b []byte) hpage {
 	return hpage{b: b, o: h.o}
 }
 
@@ -73,7 +73,7 @@ func (p hpage) pairfits(key, val []byte) bool {
 	return p.at(2) >= realKey && pairsize(key, val)+ovflSize <= p.freespace()
 }
 
-func (h *Hash) pageInit(b []byte) {
+func (h *DB) pageInit(b []byte) {
 	p := h.page(b)
 	p.set(0, 0)
 	p.set(1, int(h.hdr.BSize)-3*2)
@@ -102,7 +102,7 @@ func (p hpage) putpair(key, val []byte) {
 	p.set(n+2, off)
 }
 
-func (h *Hash) delpair(bufp *buf, ndx int) error {
+func (h *DB) delpair(bufp *buf, ndx int) error {
 	bp := h.page(bufp.page)
 	n := bp.at(0)
 	if bp.at(ndx+1) < realKey {
@@ -138,7 +138,7 @@ func (h *Hash) delpair(bufp *buf, ndx int) error {
 	return nil
 }
 
-func (h *Hash) splitPage(obucket, nbucket int) error {
+func (h *DB) splitPage(obucket, nbucket int) error {
 	bsize := int(h.hdr.BSize)
 	copyto, off := bsize, bsize
 	oldp, err := h.getBuf(obucket, nil, false)
@@ -189,7 +189,7 @@ func (h *Hash) splitPage(obucket, nbucket int) error {
 
 // uglySplit is called when we encounter an overflow or big key/data page
 // during split handling
-func (h *Hash) uglySplit(obucket int, oldp, newp *buf, copyto, moved int) error {
+func (h *DB) uglySplit(obucket int, oldp, newp *buf, copyto, moved int) error {
 	bsize := int(h.hdr.BSize)
 	bufp := oldp
 	ino := h.page(oldp.page)
@@ -272,7 +272,7 @@ func (h *Hash) uglySplit(obucket int, oldp, newp *buf, copyto, moved int) error 
 }
 
 // addel adds the given pair to the page
-func (h *Hash) addel(bufp *buf, key, val []byte) error {
+func (h *DB) addel(bufp *buf, key, val []byte) error {
 	bp := h.page(bufp.page)
 	var doExpand bool
 	var err error
@@ -330,7 +330,7 @@ func (h *Hash) addel(bufp *buf, key, val []byte) error {
 	return nil
 }
 
-func (h *Hash) addOvflpage(bufp *buf) (*buf, error) {
+func (h *DB) addOvflpage(bufp *buf) (*buf, error) {
 	sp := h.page(bufp.page)
 
 	// Check if we are dynamically determining the fill factor
@@ -361,7 +361,7 @@ func (h *Hash) addOvflpage(bufp *buf) (*buf, error) {
 }
 
 // squeezeKey puts pair on page whose last entry is an overflow pointer
-func (h *Hash) squeezeKey(sp hpage, key, val []byte) {
+func (h *DB) squeezeKey(sp hpage, key, val []byte) {
 	n := sp.at(0)
 	freeSpace := sp.freespace()
 	off := sp.offset()
@@ -380,22 +380,22 @@ func (h *Hash) squeezeKey(sp hpage, key, val []byte) {
 	sp.setOffset(off)
 }
 
-func (h *Hash) word(m []byte, i int) uint32 {
+func (h *DB) word(m []byte, i int) uint32 {
 	return h.o.Uint32(m[4*i:])
 }
 
-func (h *Hash) setbit(m []byte, n int) {
+func (h *DB) setbit(m []byte, n int) {
 	i := n / bitsPerMap
 	h.o.PutUint32(m[4*i:], h.word(m, i)|1<<(n%bitsPerMap))
 }
 
-func (h *Hash) clrbit(m []byte, n int) {
+func (h *DB) clrbit(m []byte, n int) {
 	i := n / bitsPerMap
 	h.o.PutUint32(m[4*i:], h.word(m, i)&^(1<<(n%bitsPerMap)))
 }
 
 // ibitmap initializes a new bitmap page
-func (h *Hash) ibitmap(pnum, nbits, ndx int) {
+func (h *DB) ibitmap(pnum, nbits, ndx int) {
 	ip := make([]byte, h.hdr.BSize)
 	h.nmaps++
 	clearints := (nbits-1)>>intByteShift + 1
@@ -408,7 +408,7 @@ func (h *Hash) ibitmap(pnum, nbits, ndx int) {
 	h.mapp[ndx] = ip
 }
 
-func (h *Hash) fetchBitmap(ndx int) ([]byte, error) {
+func (h *DB) fetchBitmap(ndx int) ([]byte, error) {
 	if ndx >= h.nmaps {
 		return nil, db.ErrOverflow
 	}
@@ -420,7 +420,7 @@ func (h *Hash) fetchBitmap(ndx int) ([]byte, error) {
 	return m, nil
 }
 
-func (h *Hash) bitmap(ndx int) ([]byte, error) {
+func (h *DB) bitmap(ndx int) ([]byte, error) {
 	if m := h.mapp[ndx]; m != nil {
 		return m, nil
 	}
@@ -437,7 +437,7 @@ func firstFree(m uint32) int {
 }
 
 // overflowPage allocates an overflow page and returns its address
-func (h *Hash) overflowPage() (int, error) {
+func (h *DB) overflowPage() (int, error) {
 	hdr := &h.hdr
 	shift := int(hdr.BShift) + byteShift
 	mask := int(hdr.BSize)<<byteShift - 1
@@ -545,7 +545,7 @@ func (h *Hash) overflowPage() (int, error) {
 }
 
 // freeOvflpage marks overflow page as free
-func (h *Hash) freeOvflpage(obufp *buf) error {
+func (h *DB) freeOvflpage(obufp *buf) error {
 	hdr := &h.hdr
 	addr := obufp.addr
 	ndx := addr >> splitShift

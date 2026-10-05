@@ -2,8 +2,9 @@ package btree
 
 import "github.com/dim13/db"
 
-// Del deletes the item(s) referenced by a key
-func (t *BTree) Del(key []byte, flag uint) error {
+// Del deletes all entries with key, or with RCursor the entry at the
+// cursor.
+func (t *DB) Del(key []byte, flag uint) error {
 	if t.flags&bRdOnly != 0 {
 		return db.ErrReadOnly
 	}
@@ -50,7 +51,7 @@ func (t *BTree) Del(key []byte, flag uint) error {
 }
 
 // stkacq acquires a stack for page pgno holding key, so we can delete it
-func (t *BTree) stkacq(key []byte, pgno uint32) (page, error) {
+func (t *DB) stkacq(key []byte, pgno uint32) (page, error) {
 	// Find the first occurrence of the key in the tree.
 	// Start from the leaf the stack leads to, search may have stepped
 	// to a sibling.
@@ -149,7 +150,7 @@ func (t *BTree) stkacq(key []byte, pgno uint32) (page, error) {
 }
 
 // bdelete deletes all key/data pairs matching the specified key
-func (t *BTree) bdelete(key []byte) error {
+func (t *DB) bdelete(key []byte) error {
 	var deleted bool
 	for {
 		// Find any matching record.
@@ -230,7 +231,7 @@ func (t *BTree) bdelete(key []byte) error {
 
 // pdeleteKey deletes page h holding key, unlike 1.85 it reacquires the
 // stack if search stepped to a sibling page
-func (t *BTree) pdeleteKey(key []byte, h page) error {
+func (t *DB) pdeleteKey(key []byte, h page) error {
 	if h.pgno() != t.leaf {
 		var err error
 		if h, err = t.stkacq(key, h.pgno()); err != nil {
@@ -241,7 +242,7 @@ func (t *BTree) pdeleteKey(key []byte, h page) error {
 }
 
 // pdelete deletes a single page from the tree
-func (t *BTree) pdelete(h page) error {
+func (t *DB) pdelete(h page) error {
 	// Walk the parent page stack.  We've just deleted a page, so we
 	// have to delete the key from the parent page.  If the delete from
 	// the parent page makes it empty, this process may continue all
@@ -301,7 +302,7 @@ func (t *BTree) pdelete(h page) error {
 }
 
 // dleaf deletes a single record from a leaf page
-func (t *BTree) dleaf(key []byte, h page, index int) error {
+func (t *DB) dleaf(key []byte, h page, index int) error {
 	c := &t.cursor
 	// If this record is referenced by the cursor, delete the cursor.
 	if c.flags&cursInit != 0 && c.flags&cursAcquire == 0 &&
@@ -334,7 +335,7 @@ func (t *BTree) dleaf(key []byte, h page, index int) error {
 }
 
 // curdel deletes the cursor
-func (t *BTree) curdel(key []byte, h page, index int) error {
+func (t *DB) curdel(key []byte, h page, index int) error {
 	// If there are duplicates, move forward or backward to one.
 	// Otherwise, copy the key into the cursor area.
 	c := &t.cursor
@@ -408,7 +409,7 @@ func (t *BTree) curdel(key []byte, h page, index int) error {
 }
 
 // relink links around a deleted page
-func (t *BTree) relink(h page) error {
+func (t *DB) relink(h page) error {
 	if h.nextpg() != pInvalid {
 		pg, err := t.get(h.nextpg())
 		if err != nil {

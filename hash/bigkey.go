@@ -3,13 +3,13 @@ package hash
 import "bytes"
 
 // next returns the overflow page referenced by the last entry pair of bufp
-func (h *Hash) next(bufp *buf) (*buf, error) {
+func (h *DB) next(bufp *buf) (*buf, error) {
 	bp := h.page(bufp.page)
 	return h.getBuf(bp.at(bp.at(0)-1), bufp, false)
 }
 
 // bigInsert inserts a key/data pair too big for a page
-func (h *Hash) bigInsert(bufp *buf, key, val []byte) error {
+func (h *DB) bigInsert(bufp *buf, key, val []byte) error {
 	p := h.page(bufp.page)
 	keyData, valData := key, val
 	var err error
@@ -86,7 +86,7 @@ func (h *Hash) bigInsert(bufp *buf, key, val []byte) error {
 
 // bigDelete is called when bufp's page contains a partial key (index
 // should be 1).  All pages in the big key/data pair except bufp are freed.
-func (h *Hash) bigDelete(bufp *buf) error {
+func (h *DB) bigDelete(bufp *buf) error {
 	rbufp := bufp
 	var lastBfp *buf
 	bp := h.page(bufp.page)
@@ -148,7 +148,7 @@ func (h *Hash) bigDelete(bufp *buf) error {
 }
 
 // findBigpair reports if key matches the big pair at ndx
-func (h *Hash) findBigpair(bufp *buf, ndx int, key []byte) (int, bool, error) {
+func (h *DB) findBigpair(bufp *buf, ndx int, key []byte) (int, bool, error) {
 	bsize := int(h.hdr.BSize)
 	bp := h.page(bufp.page)
 	var err error
@@ -172,7 +172,7 @@ func (h *Hash) findBigpair(bufp *buf, ndx int, key []byte) (int, bool, error) {
 
 // findLastPage finds the last page of the big pair starting at bufp, and
 // returns page number of the overflow page following it, 0 if none
-func (h *Hash) findLastPage(bufp *buf) (int, *buf, error) {
+func (h *DB) findLastPage(bufp *buf) (int, *buf, error) {
 	bp := h.page(bufp.page)
 	var err error
 	for {
@@ -195,7 +195,7 @@ func (h *Hash) findLastPage(bufp *buf) (int, *buf, error) {
 }
 
 // setCursor advances the scan cursor past the big pair ending on bufp
-func (h *Hash) setCursor(bufp *buf) error {
+func (h *DB) setCursor(bufp *buf) error {
 	bp := h.page(bufp.page)
 	h.cndx = 1
 	if bp.at(0) == 2 {
@@ -217,7 +217,7 @@ func (h *Hash) setCursor(bufp *buf) error {
 
 // bigReturn returns the data for the key/data pair that begins on this
 // page at this index (index should always be 1)
-func (h *Hash) bigReturn(bufp *buf, ndx int, setCurrent bool) ([]byte, error) {
+func (h *DB) bigReturn(bufp *buf, ndx int, setCurrent bool) ([]byte, error) {
 	bp := h.page(bufp.page)
 	var err error
 	for bp.at(ndx+1) == partialKey {
@@ -263,7 +263,7 @@ func (h *Hash) bigReturn(bufp *buf, ndx int, setCurrent bool) ([]byte, error) {
 }
 
 // collectData collects data continued on pages starting at bufp
-func (h *Hash) collectData(bufp *buf, set bool) ([]byte, error) {
+func (h *DB) collectData(bufp *buf, set bool) ([]byte, error) {
 	var data []byte
 	var err error
 	for {
@@ -285,7 +285,7 @@ func (h *Hash) collectData(bufp *buf, set bool) ([]byte, error) {
 }
 
 // bigKeydata collects key and data of the big pair starting at bufp
-func (h *Hash) bigKeydata(bufp *buf, set bool) ([]byte, []byte, error) {
+func (h *DB) bigKeydata(bufp *buf, set bool) ([]byte, []byte, error) {
 	var key []byte
 	var err error
 	for {
@@ -310,7 +310,7 @@ type splitReturn struct {
 }
 
 // bigSplit moves the big pair at bigKeyp to op or np
-func (h *Hash) bigSplit(op, np, bigKeyp *buf, obucket int) (splitReturn, error) {
+func (h *DB) bigSplit(op, np, bigKeyp *buf, obucket int) (splitReturn, error) {
 	var ret splitReturn
 	bp := bigKeyp
 

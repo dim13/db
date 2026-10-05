@@ -1,4 +1,5 @@
-// Package recno implements RecNo type of Berkeley DB 1.85
+// Package recno implements the record number access method of Berkeley DB
+// 1.85: records of a flat text file addressed by their position.
 //
 // Keys are record numbers starting at 1, encoded as 4 bytes in native byte
 // order, see binary.NativeEndian.
@@ -15,7 +16,7 @@ import (
 	"github.com/dim13/db"
 )
 
-// Info flags
+// Flags for Info.Flags.
 const (
 	RFixedLen = 0x01 // fixed-length records
 	RNoKey    = 0x02 // key not required
@@ -31,7 +32,7 @@ const (
 	sSearch
 )
 
-// Info holds recno open parameters, the zero value and nil mean defaults
+// Info holds options for New.  Zero fields and a nil Info select defaults.
 type Info struct {
 	Flags     uint             // RFixedLen, RNoKey, RSnapshot
 	PSize     int              // page size
@@ -42,14 +43,15 @@ type Info struct {
 	ReadOnly  bool             // refuse changes, never write
 }
 
-// RecNo is a record oriented tree
-type RecNo struct {
+// DB is an open record number database.  It is not safe for concurrent
+// use.
+type DB struct {
 	t *tree
 }
 
-// New opens a recno database backed by flat text file, or an in-memory one
-// if file is nil
-func New(file *os.File, info *Info) (*RecNo, error) {
+// New opens a database of the records in a flat text file, or an
+// in-memory one if file is nil.  Records are read from the file as needed.
+func New(file *os.File, info *Info) (*DB, error) {
 	var bfile *os.File
 	var psize int
 	var order binary.ByteOrder
@@ -118,7 +120,7 @@ func New(file *os.File, info *Info) (*RecNo, error) {
 			return nil, err
 		}
 	}
-	return &RecNo{t: t}, nil
+	return &DB{t: t}, nil
 }
 
 func recKey(key []byte) (uint32, error) {
@@ -128,8 +130,9 @@ func recKey(key []byte) (uint32, error) {
 	return binary.NativeEndian.Uint32(key), nil
 }
 
-// Close syncs and closes the recno database
-func (r *RecNo) Close() error {
+// Close writes changed records back to the flat file and closes it and
+// the btree file.
+func (r *DB) Close() error {
 	t := r.t
 	if err := r.Sync(0); err != nil {
 		return err
@@ -144,16 +147,17 @@ func (r *RecNo) Close() error {
 	return err
 }
 
-// Fd returns file descriptor of the record file
-func (r *RecNo) Fd() uintptr {
+// Fd returns the file descriptor of the flat file, or ^uintptr(0) if
+// there is none.
+func (r *DB) Fd() uintptr {
 	if r.t.rfile == nil {
 		return ^uintptr(0)
 	}
 	return r.t.rfile.Fd()
 }
 
-// Get gets a record
-func (r *RecNo) Get(key []byte, flag uint) ([]byte, error) {
+// Get returns the record numbered key, or ErrNotFound.
+func (r *DB) Get(key []byte, flag uint) ([]byte, error) {
 	t := r.t
 	nrec, err := recKey(key)
 	if err != nil {
@@ -180,8 +184,12 @@ func (r *RecNo) Get(key []byte, flag uint) ([]byte, error) {
 	return t.recData(*e)
 }
 
-// Put adds a record and returns its record number
-func (r *RecNo) Put(key, data []byte, flag uint) ([]byte, error) {
+// Put stores data as record key and returns its record number.  Missing
+// records before key are created empty.  RIBefore and RIAfter insert
+// before or after record key, RSetCursor also moves the cursor there,
+// RCursor replaces the record at the cursor, and RNoOverwrite returns
+// ErrKeyExist for an existing record.
+func (r *DB) Put(key, data []byte, flag uint) ([]byte, error) {
 	t := r.t
 	if t.flags&bRdOnly != 0 {
 		return nil, db.ErrReadOnly
@@ -323,8 +331,9 @@ func (t *tree) recIput(nrec uint32, data []byte, flag uint) error {
 	return nil
 }
 
-// Del deletes a record
-func (r *RecNo) Del(key []byte, flag uint) error {
+// Del deletes the record numbered key, or with RCursor the record at the
+// cursor, renumbering the records after it.
+func (r *DB) Del(key []byte, flag uint) error {
 	t := r.t
 	if t.flags&bRdOnly != 0 {
 		return db.ErrReadOnly
@@ -458,8 +467,10 @@ func (t *tree) recData(e epg) ([]byte, error) {
 	return bytes.Clone(rl.data), nil
 }
 
-// Seq is the recno sequential scan interface
-func (r *RecNo) Seq(key []byte, flag uint) ([]byte, []byte, error) {
+// Seq returns the next record number and record, or ErrNotFound at the
+// end.  RFirst and RLast start at either end, RCursor at record key; RNext
+// and RPrev continue the scan.
+func (r *DB) Seq(key []byte, flag uint) ([]byte, []byte, error) {
 	t := r.t
 	var nrec uint32
 	switch flag {
@@ -516,8 +527,9 @@ func (r *RecNo) Seq(key []byte, flag uint) ([]byte, []byte, error) {
 	return binary.NativeEndian.AppendUint32(nil, nrec), data, nil
 }
 
-// Sync writes the records back to the flat file
-func (r *RecNo) Sync(flag uint) error {
+// Sync writes the records back to the flat file.  With RRecnoSync it
+// syncs only the btree file.
+func (r *DB) Sync(flag uint) error {
 	t := r.t
 	if flag == db.RRecnoSync {
 		return t.sync()
@@ -531,7 +543,7 @@ func (r *RecNo) Sync(flag uint) error {
 	return t.sync()
 }
 
-func (r *RecNo) syncFile() error {
+func (r *DB) syncFile() error {
 	t := r.t
 	if t.flags&(bRdOnly|rRdOnly|rInMem) != 0 || t.flags&rModified == 0 {
 		return nil

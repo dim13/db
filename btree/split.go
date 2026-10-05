@@ -4,7 +4,7 @@ import "github.com/dim13/db"
 
 // split splits page sp and inserts key/data with flags at index skip,
 // ilen is the insert length
-func (t *BTree) split(sp page, key, data []byte, flags byte, ilen, skip int) error {
+func (t *DB) split(sp page, key, data []byte, flags byte, ilen, skip int) error {
 	// Split the page into two pages, l and r.  The split routines return
 	// the page into which the key should be inserted and with skip set
 	// to the offset which should be used.
@@ -137,7 +137,7 @@ func (t *BTree) split(sp page, key, data []byte, flags byte, ilen, skip int) err
 }
 
 // bpage splits a non-root page of a btree
-func (t *BTree) bpage(h page, skip *int, ilen int) (tp, l, r page, err error) {
+func (t *DB) bpage(h page, skip *int, ilen int) (tp, l, r page, err error) {
 	// Put the new right page for the split into place.
 	var npg uint32
 	if npg, r, err = t.bnew(); err != nil {
@@ -183,7 +183,7 @@ func (t *BTree) bpage(h page, skip *int, ilen int) (tp, l, r page, err error) {
 }
 
 // root splits the root page of a btree
-func (t *BTree) root(h page, skip *int, ilen int) (tp, l, r page, err error) {
+func (t *DB) root(h page, skip *int, ilen int) (tp, l, r page, err error) {
 	var lnpg, rnpg uint32
 	if lnpg, l, err = t.bnew(); err != nil {
 		return tp, l, r, err
@@ -198,7 +198,7 @@ func (t *BTree) root(h page, skip *int, ilen int) (tp, l, r page, err error) {
 }
 
 // broot fixes up the btree root page after it has been split
-func (t *BTree) broot(h, l, r page) error {
+func (t *DB) broot(h, l, r page) error {
 	// If the root page was a leaf page, change it into an internal page.
 	// We copy the key we split on (but not the key's data, in the case of
 	// a leaf page) to the new root page.  The left-most key on any level
@@ -237,7 +237,7 @@ func (t *BTree) broot(h, l, r page) error {
 }
 
 // psplit does the real work of splitting the page
-func (t *BTree) psplit(h, l, r page, pskip *int, ilen int) (page, error) {
+func (t *DB) psplit(h, l, r page, pskip *int, ilen int) (page, error) {
 	// Split the data to the left and right pages.  Leave the skip index
 	// open.  Additionally, make some effort not to split on an overflow
 	// key.  This makes internal page processing faster and can save
@@ -363,7 +363,7 @@ func (p page) isBigKey(i int) bool {
 }
 
 // preserve marks a chain of pages as used by an internal node
-func (t *BTree) preserve(pg uint32) error {
+func (t *DB) preserve(pg uint32) error {
 	h, err := t.get(pg)
 	if err != nil {
 		return err

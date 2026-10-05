@@ -10,7 +10,7 @@ import (
 )
 
 // check verifies leaves are non-empty and linked in order
-func (t *BTree) check() error {
+func (t *DB) check() error {
 	var leaves []uint32
 	var walk func(pg uint32) error
 	walk = func(pg uint32) error {
