@@ -311,17 +311,19 @@ func (t *DB) psplit(h, l, r page, pskip *int, ilen int) (left bool, err error) {
 	l.setLower(l.lower() + (off+1)*2)
 
 	// If splitting the page that the cursor was on, the cursor has to be
-	// adjusted to point to the same record as before the split.
+	// adjusted to point to the same record as before the split.  Unlike
+	// 1.85, count the open slot too when it is on the left page, which
+	// holds off+1 entries.
 	c := &t.cursor
 	if c.flags&cursInit != 0 && c.pg.pgno == h.pgno() {
 		if c.pg.index >= skip {
 			c.pg.index++
 		}
-		if c.pg.index < nxt {
+		if c.pg.index <= off {
 			c.pg.pgno = l.pgno()
 		} else {
 			c.pg.pgno = r.pgno()
-			c.pg.index -= nxt
+			c.pg.index -= off + 1
 		}
 	}
 

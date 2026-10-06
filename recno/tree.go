@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 
 	"github.com/dim13/db"
 )
@@ -61,6 +62,7 @@ type cursor struct {
 
 // tree is the in-memory btree holding records
 type tree struct {
+	mu       sync.RWMutex // Get reads, everything else writes
 	mp       *mpool
 	o        binary.ByteOrder
 	file     *os.File
@@ -183,10 +185,6 @@ func (t *tree) get(pgno uint32) (page, error) {
 
 func (t *tree) dirty(h page) {
 	t.mp.dirty(h.pgno())
-}
-
-func (t *tree) push(pgno uint32, index int) {
-	t.stack = append(t.stack, epgno{pgno: pgno, index: index})
 }
 
 func (t *tree) pop() (epgno, bool) {

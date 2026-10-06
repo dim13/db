@@ -2,6 +2,7 @@ package hash
 
 import (
 	"encoding/binary"
+	"errors"
 	"hash/fnv"
 	"os"
 	"path/filepath"
@@ -132,4 +133,87 @@ func TestReadOnly(t *testing.T) {
 	if err := dbtest.ReadOnly(d, k); err != nil {
 		t.Error(err)
 	}
+}
+
+func TestConcurrent(t *testing.T) {
+	testCases := []struct {
+		name string
+		file bool
+		info *Info
+	}{
+		{name: "memory"},
+		{name: "file", file: true, info: &Info{BucketSize: 512}},
+		{name: "cache6", file: true, info: &Info{BucketSize: 512, CacheSize: 1}},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			var d db.DB
+			if tc.file {
+				d = open(t, filepath.Join(t.TempDir(), "test.db"), tc.info)
+			} else {
+				var err error
+				if d, err = New(nil, tc.info); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := dbtest.Concurrent(d, 2000); err != nil {
+				t.Error(err)
+			}
+			if err := d.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+// TestSeqAfterDelete deletes while scanning, which C leaves undefined;
+// the scan may skip entries but must not fail.
+func TestSeqAfterDelete(t *testing.T) {
+	h, _ := New(nil, &Info{BucketSize: 512})
+	for i := range 2000 {
+		k, v := dbtest.Gen(i)
+		h.Put(k, v, 0)
+	}
+	for flag := db.RFirst; ; flag = db.RNext {
+		k, _, err := h.Seq(nil, flag)
+		if errors.Is(err, db.ErrNotFound) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.Del(k, 0) // delete what was just returned
+		if len(k)%3 == 0 {
+			for i := 0; i < 2000; i += 7 {
+				k, _ := dbtest.Gen(i)
+				h.Del(k, 0)
+			}
+		}
+	}
+}
+
+func BenchmarkGet(b *testing.B) {
+	d, _ := New(nil, nil)
+	keys := make([][]byte, 10000)
+	for i := range keys {
+		k, v := dbtest.Gen(i)
+		d.Put(k, v, 0)
+		keys[i] = k
+	}
+	b.Run("serial", func(b *testing.B) {
+		var i int
+		for b.Loop() {
+			d.Get(keys[i%len(keys)], 0)
+			i++
+		}
+	})
+	b.Run("parallel", func(b *testing.B) {
+		b.RunParallel(func(pb *testing.PB) {
+			var i int
+			for pb.Next() {
+				d.Get(keys[i%len(keys)], 0)
+				i++
+			}
+		})
+	})
 }

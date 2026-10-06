@@ -6,6 +6,8 @@ import "github.com/dim13/db"
 // end.  RFirst and RLast start at either end, RCursor at the first key not
 // less than key; RNext and RPrev continue the scan.
 func (t *DB) Seq(key []byte, flag db.Flag) (rkey, data []byte, err error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	defer t.done(&err)
 	// If scan uninitialized as yet, or starting at a specific record, set
 	// the scan to a specific key.

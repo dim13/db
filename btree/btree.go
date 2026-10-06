@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 
 	"github.com/dim13/db"
 )
@@ -82,8 +83,11 @@ type cursor struct {
 	flags uint8
 }
 
-// DB is an open B-Tree database.  It is not safe for concurrent use.
+// DB is an open B-Tree database, safe for concurrent use: Get calls run in
+// parallel, other methods one at a time; Seq has a single cursor shared
+// by all callers.
 type DB struct {
+	mu       sync.RWMutex // Get reads, everything else writes
 	mp       *mpool
 	o        binary.ByteOrder
 	file     *os.File
@@ -256,6 +260,8 @@ func (t *DB) pop() (epgno, bool) {
 
 // Close syncs the tree and closes its file.
 func (t *DB) Close() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	if err := t.sync(); err != nil {
 		return err
 	}
@@ -283,6 +289,8 @@ func (t *DB) done(err *error) {
 }
 
 func (t *DB) Sync(flag db.Flag) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	if flag != 0 {
 		return db.ErrInvalid
 	}
@@ -492,28 +500,38 @@ func defPrefix(a, b []byte) int {
 	return len(a)
 }
 
-// search searches a btree for a key
+// search searches a btree for a key, leaving the parent pages on t.stack
+// for split and delete.
 func (t *DB) search(key []byte) (*epg, bool, error) {
 	t.stack = t.stack[:0]
+	cur, exact, leaf, err := t.lookup(key, &t.stack)
+	t.cur, t.leaf = cur, leaf
+	return &t.cur, exact, err
+}
+
+// lookup finds key or where to insert it, collecting the parent pages on
+// stack unless nil.  It changes no tree state, so readers may run it
+// concurrently.
+func (t *DB) lookup(key []byte, stack *[]epgno) (cur epg, exact bool, leaf uint32, err error) {
 	for pg := uint32(pRoot); ; {
 		h, err := t.get(pg)
 		if err != nil {
-			return nil, false, err
+			return cur, false, leaf, err
 		}
-		t.cur.page = h
-		t.leaf = pg
+		cur.page = h
+		leaf = pg
 		var base, index int
 		var found bool
 		for lim := h.nextIndex(); lim != 0; lim >>= 1 {
 			index = base + lim>>1
-			t.cur.index = index
-			cmp, err := t.compare(key, t.cur)
+			cur.index = index
+			cmp, err := t.compare(key, cur)
 			if err != nil {
-				return nil, false, err
+				return cur, false, leaf, err
 			}
 			if cmp == 0 {
 				if h.isType(pBLeaf) {
-					return &t.cur, true, nil
+					return cur, true, leaf, nil
 				}
 				found = true
 				break
@@ -536,34 +554,36 @@ func (t *DB) search(key []byte) (*epg, bool, error) {
 					case base == h.nextIndex() && h.nextpg() != pInvalid:
 						pg, index = h.nextpg(), 0
 					}
-					if ok, err := t.sibling(pg, index, key); err != nil {
-						return nil, false, err
+					if e, ok, err := t.sibling(pg, index, key); err != nil {
+						return cur, false, leaf, err
 					} else if ok {
-						return &t.cur, true, nil
+						return e, true, leaf, nil
 					}
 				}
-				t.cur.index = base
-				return &t.cur, false, nil
+				cur.index = base
+				return cur, false, leaf, nil
 			}
 			index = base
 			if base != 0 {
 				index = base - 1
 			}
 		}
-		t.push(h.pgno(), index)
+		if stack != nil {
+			*stack = append(*stack, epgno{pgno: h.pgno(), index: index})
+		}
 		pg = h.binternal(index).pgno
 	}
 }
 
 // sibling checks for an exact match at index of sibling page pg, -1 for
 // its last index
-func (t *DB) sibling(pg uint32, index int, key []byte) (bool, error) {
+func (t *DB) sibling(pg uint32, index int, key []byte) (epg, bool, error) {
 	if pg == pInvalid {
-		return false, nil
+		return epg{}, false, nil
 	}
 	p, err := t.get(pg)
 	if err != nil || p.nextIndex() == 0 {
-		return false, err
+		return epg{}, false, err
 	}
 	if index < 0 {
 		index = p.nextIndex() - 1
@@ -571,27 +591,28 @@ func (t *DB) sibling(pg uint32, index int, key []byte) (bool, error) {
 	e := epg{page: p, index: index}
 	cmp, err := t.compare(key, e)
 	if err != nil || cmp != 0 {
-		return false, err
+		return epg{}, false, err
 	}
-	t.cur = e
-	return true, nil
+	return e, true, nil
 }
 
 // Get returns the data stored under key, or ErrNotFound.  With duplicates
 // it returns one of them.
 func (t *DB) Get(key []byte, flag db.Flag) (data []byte, err error) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	defer t.done(&err)
 	if flag != 0 {
 		return nil, db.ErrInvalid
 	}
-	e, exact, err := t.search(key)
+	e, exact, _, err := t.lookup(key, nil)
 	if err != nil {
 		return nil, err
 	}
 	if !exact {
 		return nil, db.ErrNotFound
 	}
-	_, data, err = t.ret(*e, false, true)
+	_, data, err = t.ret(e, false, true)
 	return data, err
 }
 
@@ -599,6 +620,8 @@ func (t *DB) Get(key []byte, flag db.Flag) (data []byte, err error) {
 // existing entry; with RNoOverwrite it returns ErrKeyExist instead; with
 // RCursor it replaces the entry at the cursor.
 func (t *DB) Put(key, data []byte, flag db.Flag) (rkey []byte, err error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	defer t.done(&err)
 	if err := t.put(key, data, flag); err != nil {
 		return nil, err

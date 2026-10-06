@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
+	"sync/atomic"
 
 	"github.com/dim13/db"
 )
@@ -47,22 +49,27 @@ func nrleafdbt(dsize int) int {
 	return lalign(4 + 1 + dsize)
 }
 
-// mpool is an LRU page cache.  Callers hold page slices during an
-// operation, so pages are only evicted by trim between operations.
+// mpool is a page cache evicting least recently used pages, approximated
+// by second chance.  Hits take no lock, so concurrent readers scale.
+// Callers hold page slices during an operation, so pages are only evicted
+// by trim between operations.
 type mpool struct {
+	mu      sync.Mutex // guards lru, npages and stores to pages
 	file    *os.File
 	psize   int
 	npages  uint32
-	limit   int  // pages kept by trim, 0 for no limit
-	noWrite bool // read-only, dirty pages stay cached
-	pages   map[uint32]*list.Element
-	lru     list.List // of *cpage, most recently used first
+	limit   int       // pages kept by trim, 0 for no limit
+	noWrite bool      // read-only, dirty pages stay cached
+	pages   sync.Map  // pgno to *list.Element
+	lru     list.List // of *cpage, most recently added first
+	cached  atomic.Int64
 }
 
 type cpage struct {
 	pgno uint32
 	b    []byte
 	mod  bool
+	used atomic.Bool // hit since last trim, gets a second chance
 }
 
 func newMpool(file *os.File, psize int, size int64, limit int) *mpool {
@@ -74,17 +81,37 @@ func newMpool(file *os.File, psize int, size int64, limit int) *mpool {
 		psize:  psize,
 		npages: uint32(size / int64(psize)),
 		limit:  limit,
-		pages:  make(map[uint32]*list.Element),
 	}
 }
 
+func (m *mpool) lookup(pgno uint32) (*cpage, bool) {
+	v, ok := m.pages.Load(pgno)
+	if !ok {
+		return nil, false
+	}
+	return v.(*list.Element).Value.(*cpage), true
+}
+
+func (m *mpool) add(p *cpage) {
+	m.pages.Store(p.pgno, m.lru.PushFront(p))
+	m.cached.Add(1)
+}
+
 func (m *mpool) get(pgno uint32) ([]byte, error) {
+	if p, ok := m.lookup(pgno); ok {
+		if !p.used.Load() { // spare the cache line when set
+			p.used.Store(true)
+		}
+		return p.b, nil
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if pgno >= m.npages {
 		return nil, db.ErrNoPage
 	}
-	if el, ok := m.pages[pgno]; ok {
-		m.lru.MoveToFront(el)
-		return el.Value.(*cpage).b, nil
+	if p, ok := m.lookup(pgno); ok { // read by another reader meanwhile
+		return p.b, nil
 	}
 	p := make([]byte, m.psize)
 	if _, err := m.file.ReadAt(p, int64(pgno)*int64(m.psize)); err != nil {
@@ -93,21 +120,25 @@ func (m *mpool) get(pgno uint32) ([]byte, error) {
 		}
 		return nil, fmt.Errorf("page %d: %w", pgno, err)
 	}
-	m.pages[pgno] = m.lru.PushFront(&cpage{pgno: pgno, b: p})
+	m.add(&cpage{pgno: pgno, b: p})
 	return p, nil
 }
 
 func (m *mpool) new() (uint32, []byte) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	pgno := m.npages
 	m.npages++
 	p := make([]byte, m.psize)
-	m.pages[pgno] = m.lru.PushFront(&cpage{pgno: pgno, b: p, mod: true})
+	m.add(&cpage{pgno: pgno, b: p, mod: true})
 	return pgno, p
 }
 
-// dirty marks a page cached since get or new of the same operation
+// dirty marks a page cached since get or new of the same operation, only
+// writers call it
 func (m *mpool) dirty(pgno uint32) {
-	m.pages[pgno].Value.(*cpage).mod = true
+	p, _ := m.lookup(pgno)
+	p.mod = true
 }
 
 func (m *mpool) write(p *cpage) error {
@@ -122,6 +153,8 @@ func (m *mpool) sync() error {
 	if m.file == nil {
 		return nil
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	for el := m.lru.Front(); el != nil; el = el.Next() {
 		if p := el.Value.(*cpage); p.mod {
 			if err := m.write(p); err != nil {
@@ -134,9 +167,18 @@ func (m *mpool) sync() error {
 
 // trim evicts least recently used pages down to limit, writing dirty ones
 func (m *mpool) trim() error {
-	for m.limit > 0 && m.lru.Len() > m.limit {
+	if m.limit == 0 || m.cached.Load() <= int64(m.limit) {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for m.lru.Len() > m.limit {
 		el := m.lru.Back()
 		p := el.Value.(*cpage)
+		if p.used.Swap(false) {
+			m.lru.MoveToFront(el)
+			continue
+		}
 		if p.mod {
 			if m.noWrite {
 				return nil
@@ -146,7 +188,8 @@ func (m *mpool) trim() error {
 			}
 		}
 		m.lru.Remove(el)
-		delete(m.pages, p.pgno)
+		m.pages.Delete(p.pgno)
+		m.cached.Add(-1)
 	}
 	return nil
 }

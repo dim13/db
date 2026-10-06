@@ -46,7 +46,9 @@ for k, v, err := d.Seq(nil, db.RFirst); err == nil; k, v, err = d.Seq(nil, db.RN
 
 Routine flags (`db.RCursor`, `db.RFirst`, ...) and errors are those of
 the C interface, see package [db](https://pkg.go.dev/github.com/dim13/db).
-A database is not safe for concurrent use.
+A database is safe for concurrent use: `Get` calls run in parallel,
+other methods one at a time, and `Seq` has a single cursor shared by
+all callers.
 
 File formats are described in [doc/btree.txt](doc/btree.txt),
 [doc/hash.txt](doc/hash.txt) and [doc/recno.txt](doc/recno.txt).

@@ -10,6 +10,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"slices"
+	"sync"
 
 	"github.com/dim13/db"
 )
@@ -185,4 +186,63 @@ func ReadOnly(d db.DB, key []byte) error {
 		return fmt.Errorf("close: %w", err)
 	}
 	return nil
+}
+
+// Concurrent runs readers of n stable keys in parallel with writers
+// adding and deleting n other keys and a scanner, returning the first
+// error.  Readers must always see the stable keys unchanged.
+func Concurrent(d db.DB, n int) error {
+	for i := range n {
+		k, v := Gen(i)
+		if _, err := d.Put(k, v, 0); err != nil {
+			return err
+		}
+	}
+	errc := make(chan error, 16)
+	var wg sync.WaitGroup
+	for r := range 4 {
+		wg.Go(func() {
+			for i := range n {
+				i = (i + r*n/4) % n
+				k, want := Gen(i)
+				got, err := d.Get(k, 0)
+				if err != nil || !bytes.Equal(got, want) {
+					errc <- fmt.Errorf("reader %d get %d: %v", r, i, err)
+					return
+				}
+			}
+		})
+	}
+	for w := range 2 {
+		wg.Go(func() {
+			for i := n + w; i < 2*n; i += 2 {
+				k, v := Gen(i)
+				if _, err := d.Put(k, v, 0); err != nil {
+					errc <- fmt.Errorf("writer %d put %d: %w", w, i, err)
+					return
+				}
+				if i%3 == 0 {
+					if err := d.Del(k, 0); err != nil {
+						errc <- fmt.Errorf("writer %d del %d: %w", w, i, err)
+						return
+					}
+				}
+			}
+		})
+	}
+	wg.Go(func() {
+		for flag := db.RFirst; ; flag = db.RNext {
+			_, _, err := d.Seq(nil, flag)
+			if errors.Is(err, db.ErrNotFound) {
+				return
+			}
+			if err != nil {
+				errc <- fmt.Errorf("seq: %w", err)
+				return
+			}
+		}
+	})
+	wg.Wait()
+	close(errc)
+	return <-errc
 }

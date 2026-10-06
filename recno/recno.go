@@ -45,8 +45,9 @@ type Info struct {
 	ReadOnly  bool             // refuse changes, never write
 }
 
-// DB is an open record number database.  It is not safe for concurrent
-// use.
+// DB is an open record number database, safe for concurrent use: Get calls run in
+// parallel, other methods one at a time; Seq has a single cursor shared
+// by all callers.
 type DB struct {
 	t *tree
 }
@@ -139,7 +140,9 @@ func keyNum(key []byte) (uint32, error) {
 // the btree file.
 func (r *DB) Close() error {
 	t := r.t
-	if err := r.Sync(0); err != nil {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if err := r.sync(0); err != nil {
 		return err
 	}
 	var err error
@@ -164,7 +167,6 @@ func (r *DB) Fd() uintptr {
 // Get returns the record numbered key, or ErrNotFound.
 func (r *DB) Get(key []byte, flag db.Flag) (data []byte, err error) {
 	t := r.t
-	defer t.done(&err)
 	nrec, err := keyNum(key)
 	if err != nil {
 		return nil, err
@@ -173,21 +175,32 @@ func (r *DB) Get(key []byte, flag db.Flag) (data []byte, err error) {
 		return nil, db.ErrInvalid
 	}
 
-	// If we haven't seen this record yet, try to find it in the
-	// original file.
-	if nrec > t.nrecs {
-		if t.flags&(rEOF|rInMem) != 0 {
-			return nil, db.ErrNotFound
+	// Reading more of the flat file changes the tree, so it needs the
+	// write lock.
+	t.mu.RLock()
+	more := nrec > t.nrecs && t.flags&(rEOF|rInMem) == 0
+	t.mu.RUnlock()
+	if more {
+		t.mu.Lock()
+		defer t.mu.Unlock()
+		if nrec > t.nrecs && t.flags&(rEOF|rInMem) == 0 {
+			if err := t.irec(nrec); err != nil {
+				return nil, err
+			}
 		}
-		if err := t.irec(nrec); err != nil {
-			return nil, err
-		}
+	} else {
+		t.mu.RLock()
+		defer t.mu.RUnlock()
 	}
-	e, err := t.search(nrec-1, sSearch)
+	defer t.done(&err)
+	if nrec > t.nrecs {
+		return nil, db.ErrNotFound
+	}
+	e, err := t.lookup(nrec-1, nil)
 	if err != nil {
 		return nil, err
 	}
-	return t.record(*e)
+	return t.record(e)
 }
 
 // Put stores data as record key and returns its record number.  Missing
@@ -197,6 +210,8 @@ func (r *DB) Get(key []byte, flag db.Flag) (data []byte, err error) {
 // ErrKeyExist for an existing record.
 func (r *DB) Put(key, data []byte, flag db.Flag) (rkey []byte, err error) {
 	t := r.t
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	defer t.done(&err)
 	if t.flags&bRdOnly != 0 {
 		return nil, db.ErrReadOnly
@@ -342,6 +357,8 @@ func (t *tree) iput(nrec uint32, data []byte, flag db.Flag) error {
 // cursor, renumbering the records after it.
 func (r *DB) Del(key []byte, flag db.Flag) (err error) {
 	t := r.t
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	defer t.done(&err)
 	if t.flags&bRdOnly != 0 {
 		return db.ErrReadOnly
@@ -404,19 +421,46 @@ func (t *tree) dleaf(h page, index int) error {
 	return nil
 }
 
-// search searches a recno tree for a 0-based record number
+// search finds 0-based record nrec, leaving the parent pages on t.stack
+// for split, and counts the record in or out of them for op.
 func (t *tree) search(nrec uint32, op int) (*epg, error) {
 	t.stack = t.stack[:0]
+	e, err := t.lookup(nrec, &t.stack)
+	if err != nil {
+		return nil, err
+	}
+	if op != sSearch {
+		for _, p := range t.stack {
+			h, err := t.get(p.pgno)
+			if err != nil {
+				return nil, err
+			}
+			r := h.rinternal(p.index)
+			if op == sInsert {
+				r.nrecs++
+			} else {
+				r.nrecs--
+			}
+			h.setRinternal(p.index, r.nrecs, r.pgno)
+			t.dirty(h)
+		}
+	}
+	t.cur = e
+	return &t.cur, nil
+}
+
+// lookup finds 0-based record nrec, collecting the parent pages on stack
+// unless nil.  It changes no tree state, so readers may run it
+// concurrently.
+func (t *tree) lookup(nrec uint32, stack *[]epgno) (epg, error) {
 	var total uint32
 	for pg := uint32(pRoot); ; {
 		h, err := t.get(pg)
 		if err != nil {
-			t.undo(op)
-			return nil, err
+			return epg{}, err
 		}
 		if h.isType(pRLeaf) {
-			t.cur = epg{page: h, index: int(nrec - total)}
-			return &t.cur, nil
+			return epg{page: h, index: int(nrec - total)}, nil
 		}
 		var r rinternal
 		index, top := 0, h.nextIndex()
@@ -427,41 +471,10 @@ func (t *tree) search(nrec uint32, op int) (*epg, error) {
 			}
 			total += r.nrecs
 		}
-		t.push(pg, index-1)
+		if stack != nil {
+			*stack = append(*stack, epgno{pgno: pg, index: index - 1})
+		}
 		pg = r.pgno
-		switch op {
-		case sDelete:
-			h.setRinternal(index-1, r.nrecs-1, r.pgno)
-			t.dirty(h)
-		case sInsert:
-			h.setRinternal(index-1, r.nrecs+1, r.pgno)
-			t.dirty(h)
-		}
-	}
-}
-
-// undo tries to recover the tree after a failed search
-func (t *tree) undo(op int) {
-	if op == sSearch {
-		return
-	}
-	for {
-		parent, ok := t.pop()
-		if !ok {
-			return
-		}
-		h, err := t.get(parent.pgno)
-		if err != nil {
-			return
-		}
-		r := h.rinternal(parent.index)
-		if op == sInsert {
-			r.nrecs--
-		} else {
-			r.nrecs++
-		}
-		h.setRinternal(parent.index, r.nrecs, r.pgno)
-		t.dirty(h)
 	}
 }
 
@@ -479,6 +492,8 @@ func (t *tree) record(e epg) ([]byte, error) {
 // and RPrev continue the scan.
 func (r *DB) Seq(key []byte, flag db.Flag) (rkey, data []byte, err error) {
 	t := r.t
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	defer t.done(&err)
 	var nrec uint32
 	switch flag {
@@ -538,6 +553,12 @@ func (r *DB) Seq(key []byte, flag db.Flag) (rkey, data []byte, err error) {
 // Sync writes the records back to the flat file.  With RRecnoSync it
 // syncs only the btree file.
 func (r *DB) Sync(flag db.Flag) error {
+	r.t.mu.Lock()
+	defer r.t.mu.Unlock()
+	return r.sync(flag)
+}
+
+func (r *DB) sync(flag db.Flag) error {
 	t := r.t
 	if flag == db.RRecnoSync {
 		return t.sync()

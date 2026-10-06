@@ -38,7 +38,9 @@ var (
 )
 
 // DB is an open database, the counterpart of the C DB handle.
-// Implementations are not safe for concurrent use.
+// Implementations are safe for concurrent use: Get calls run in
+// parallel, other methods one at a time; Seq has a single cursor shared
+// by all callers.
 type DB interface {
 	// Close syncs the database and closes its files.
 	Close() (err error)

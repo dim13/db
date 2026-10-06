@@ -25,7 +25,7 @@ type Entry struct {
 }
 
 // Table is a hash table, the counterpart of the table hcreate(3) creates.
-// It is not safe for concurrent use.
+// It is safe for concurrent use.
 type Table struct {
 	h *hash.DB
 }

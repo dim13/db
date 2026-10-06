@@ -182,3 +182,60 @@ func TestReadOnly(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+func TestConcurrent(t *testing.T) {
+	testCases := []struct {
+		name string
+		file bool
+		info *Info
+	}{
+		{name: "memory"},
+		{name: "file", file: true, info: &Info{PageSize: 512}},
+		{name: "cache5", file: true, info: &Info{PageSize: 512, CacheSize: 1}},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			var d *DB
+			if tc.file {
+				d = open(t, filepath.Join(t.TempDir(), "test.db"), tc.info).(*DB)
+			} else {
+				var err error
+				if d, err = New(nil, tc.info); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := dbtest.Concurrent(d, 2000); err != nil {
+				t.Error(err)
+			}
+			if err := d.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func BenchmarkGet(b *testing.B) {
+	d, _ := New(nil, nil)
+	keys := make([][]byte, 10000)
+	for i := range keys {
+		k, v := dbtest.Gen(i)
+		d.Put(k, v, 0)
+		keys[i] = k
+	}
+	b.Run("serial", func(b *testing.B) {
+		var i int
+		for b.Loop() {
+			d.Get(keys[i%len(keys)], 0)
+			i++
+		}
+	})
+	b.Run("parallel", func(b *testing.B) {
+		b.RunParallel(func(pb *testing.PB) {
+			var i int
+			for pb.Next() {
+				d.Get(keys[i%len(keys)], 0)
+				i++
+			}
+		})
+	})
+}

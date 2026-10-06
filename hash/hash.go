@@ -10,6 +10,8 @@ import (
 	"hash"
 	"io"
 	"os"
+	"sync"
+	"sync/atomic"
 
 	"github.com/dim13/db"
 )
@@ -95,14 +97,17 @@ type buf struct {
 	mod    bool   // modified
 	bucket bool   // bucket page, overflow page otherwise
 	elem   *list.Element
+	used   atomic.Bool // hit since last trim, gets a second chance
 }
 
-// DB is an open hash database.  It is not safe for concurrent use.
+// DB is an open hash database, safe for concurrent use: Get calls run in
+// parallel, other methods one at a time; Seq has a single cursor shared
+// by all callers.
 type DB struct {
 	file *os.File
 	o    binary.ByteOrder
 	hdr  header
-	hash hash.Hash32
+	hash func() hash.Hash32
 
 	nsegs    int // number of allocated segments
 	mapp     [nCached][]byte
@@ -110,10 +115,14 @@ type DB struct {
 	modified bool
 	readOnly bool
 
-	// LRU buffer cache, trimmed to limit between operations, as callers
-	// hold buffers during one.
-	buckets map[int]*buf
-	ovfls   map[int]*buf
+	// Buffer cache evicting least recently used buffers, approximated by
+	// second chance, trimmed to limit between operations, as callers hold
+	// buffers during one.  Hits take no lock, so concurrent readers scale.
+	mu      sync.RWMutex // Get reads, everything else writes
+	cmu     sync.Mutex   // guards lru and stores to buckets and ovfls
+	buckets sync.Map     // bucket address to *buf
+	ovfls   sync.Map     // overflow address to *buf
+	cached  atomic.Int64
 	lru     list.List // of *buf, most recently used first
 	limit   int       // buffers kept by trim, 0 for no limit
 
@@ -136,9 +145,7 @@ const (
 func New(file *os.File, info *Info) (*DB, error) {
 	h := &DB{
 		file:    file,
-		hash:    newTorek(),
-		buckets: make(map[int]*buf),
-		ovfls:   make(map[int]*buf),
+		hash:    newTorek,
 		cbucket: -1,
 	}
 	cache := defCacheSize
@@ -171,7 +178,7 @@ func New(file *os.File, info *Info) (*DB, error) {
 	}
 
 	if info != nil && info.Hash != nil {
-		h.hash = info.Hash()
+		h.hash = info.Hash
 	}
 	if err := binary.Read(io.NewSectionReader(file, 0, hdrSize), binary.BigEndian, &h.hdr); err != nil {
 		return nil, fmt.Errorf("%w: header", db.ErrFormat)
@@ -226,7 +233,7 @@ func (h *DB) initHash(info *Info) error {
 			hdr.FFactor = int32(info.FillFactor)
 		}
 		if info.Hash != nil {
-			h.hash = info.Hash()
+			h.hash = info.Hash
 		}
 		if info.NumElem != 0 {
 			nelem = info.NumElem
@@ -275,6 +282,8 @@ func (h *DB) initHtab(nelem int) error {
 
 // Close syncs the table and closes its file.
 func (h *DB) Close() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	if err := h.sync(); err != nil {
 		return err
 	}
@@ -295,6 +304,8 @@ func (h *DB) Fd() uintptr {
 
 // Sync writes all changes to disk, flag must be 0.
 func (h *DB) Sync(flag db.Flag) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	if flag != 0 {
 		return db.ErrInvalid
 	}
@@ -305,14 +316,12 @@ func (h *DB) sync() error {
 	if h.file == nil || h.readOnly || !h.modified {
 		return nil
 	}
-	for _, m := range []map[int]*buf{h.buckets, h.ovfls} {
-		for _, b := range m {
-			if b.mod {
-				if err := h.putPage(b.page, b.addr, b.bucket); err != nil {
-					return err
-				}
-				b.mod = false
+	for el := h.lru.Front(); el != nil; el = el.Next() {
+		if b := el.Value.(*buf); b.mod {
+			if err := h.putPage(b.page, b.addr, b.bucket); err != nil {
+				return err
 			}
+			b.mod = false
 		}
 	}
 	if err := h.flushMeta(); err != nil {
@@ -396,14 +405,25 @@ func (h *DB) putPage(p []byte, addr int, bucket bool) error {
 // getBuf returns buffer for addr; if prev is nil, addr is a bucket index,
 // overflow page address otherwise.  New overflow pages are initialized.
 func (h *DB) getBuf(addr int, prev *buf, newpage bool) (*buf, error) {
-	m := h.buckets
+	m := &h.buckets
 	if prev != nil {
-		m = h.ovfls
+		m = &h.ovfls
 	}
-	old, ok := m[addr]
-	if ok && !newpage {
-		h.lru.MoveToFront(old.elem)
-		return old, nil
+	if !newpage {
+		if v, ok := m.Load(addr); ok {
+			b := v.(*buf)
+			if !b.used.Load() { // spare the cache line when set
+				b.used.Store(true)
+			}
+			return b, nil
+		}
+	}
+
+	h.cmu.Lock()
+	defer h.cmu.Unlock()
+	v, ok := m.Load(addr)
+	if ok && !newpage { // read by another reader meanwhile
+		return v.(*buf), nil
 	}
 	b := &buf{
 		addr:   addr,
@@ -414,21 +434,38 @@ func (h *DB) getBuf(addr int, prev *buf, newpage bool) (*buf, error) {
 		return nil, err
 	}
 	if ok {
-		h.lru.Remove(old.elem)
+		h.drop(v.(*buf))
 	}
 	b.elem = h.lru.PushFront(b)
-	m[addr] = b
+	m.Store(addr, b)
+	h.cached.Add(1)
 	return b, nil
+}
+
+// drop removes b from the cache, h.cmu held or callers exclusive
+func (h *DB) drop(b *buf) {
+	m := &h.ovfls
+	if b.bucket {
+		m = &h.buckets
+	}
+	m.CompareAndDelete(b.addr, b)
+	h.lru.Remove(b.elem)
+	h.cached.Add(-1)
 }
 
 // trim evicts least recently used buffers down to limit, writing modified
 // ones.  The scan cursor's page stays, Seq holds it across calls.
 func (h *DB) trim() error {
-	for el := h.lru.Back(); el != nil && h.limit > 0 && h.lru.Len() > h.limit; {
+	if h.limit == 0 || h.cached.Load() <= int64(h.limit) {
+		return nil
+	}
+	h.cmu.Lock()
+	defer h.cmu.Unlock()
+	for h.lru.Len() > h.limit {
+		el := h.lru.Back()
 		b := el.Value.(*buf)
-		prev := el.Prev()
-		if b == h.cpage {
-			el = prev
+		if b.used.Swap(false) || b == h.cpage {
+			h.lru.MoveToFront(el)
 			continue
 		}
 		if b.mod {
@@ -440,15 +477,7 @@ func (h *DB) trim() error {
 			}
 			b.mod = false
 		}
-		m := h.ovfls
-		if b.bucket {
-			m = h.buckets
-		}
-		if m[b.addr] == b {
-			delete(m, b.addr)
-		}
-		h.lru.Remove(el)
-		el = prev
+		h.drop(b)
 	}
 	return nil
 }
@@ -461,9 +490,10 @@ func (h *DB) done(err *error) {
 }
 
 func (h *DB) sum(key []byte) uint32 {
-	h.hash.Reset()
-	h.hash.Write(key)
-	return h.hash.Sum32()
+	// A hasher per call, as concurrent readers hash keys.
+	s := h.hash()
+	s.Write(key)
+	return s.Sum32()
 }
 
 func (h *DB) callHash(key []byte) int {
@@ -477,6 +507,8 @@ func (h *DB) callHash(key []byte) int {
 
 // Get returns the data stored under key, or ErrNotFound.
 func (h *DB) Get(key []byte, flag db.Flag) (data []byte, err error) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
 	defer h.done(&err)
 	if flag != 0 {
 		return nil, db.ErrInvalid
@@ -487,6 +519,8 @@ func (h *DB) Get(key []byte, flag db.Flag) (data []byte, err error) {
 // Put stores data under key, replacing an existing entry, and returns
 // key.  With RNoOverwrite it returns ErrKeyExist instead of replacing.
 func (h *DB) Put(key, data []byte, flag db.Flag) (rkey []byte, err error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	defer h.done(&err)
 	if h.readOnly {
 		return nil, db.ErrReadOnly
@@ -507,6 +541,8 @@ func (h *DB) Put(key, data []byte, flag db.Flag) (rkey []byte, err error) {
 
 // Del deletes key.  RCursor is accepted, as in C, and deletes key too.
 func (h *DB) Del(key []byte, flag db.Flag) (err error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	defer h.done(&err)
 	if flag != 0 && flag != db.RCursor {
 		return db.ErrInvalid
@@ -617,6 +653,8 @@ func (h *DB) access(action int, key, val []byte) ([]byte, error) {
 // Seq returns the next key/data pair in hash order, or ErrNotFound at the
 // end.  RFirst starts over.  The key argument is ignored.
 func (h *DB) Seq(_ []byte, flag db.Flag) (rkey, data []byte, err error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	defer h.done(&err)
 	if flag != 0 && flag != db.RFirst && flag != db.RNext {
 		return nil, nil, db.ErrInvalid
@@ -647,6 +685,18 @@ func (h *DB) Seq(_ []byte, flag db.Flag) (rkey, data []byte, err error) {
 			}
 		} else {
 			bp = h.page(bufp.page)
+			// Unlike C, survive deletes since the last call shrinking
+			// the page below the cursor.
+			if n := bp.at(0); h.cndx >= n {
+				if n < 2 || bp.at(n) != ovflPage {
+					h.cpage = nil
+					h.cbucket++
+					h.cndx = 1
+					bp = hpage{}
+					continue
+				}
+				h.cndx = n - 1 // follow the overflow link
+			}
 		}
 		for bp.at(h.cndx+1) == ovflPage {
 			if bufp, err = h.getBuf(bp.at(h.cndx), bufp, false); err != nil {

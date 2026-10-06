@@ -21,7 +21,8 @@ const (
 	Replace             // overwrite existing data
 )
 
-// DBM is an open ndbm database.  It is not safe for concurrent use.
+// DBM is an open ndbm database, safe for concurrent use.  FirstKey and
+// NextKey share a single cursor.
 type DBM struct {
 	h *hash.DB
 }

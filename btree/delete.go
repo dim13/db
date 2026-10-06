@@ -5,6 +5,8 @@ import "github.com/dim13/db"
 // Del deletes all entries with key, or with RCursor the entry at the
 // cursor.
 func (t *DB) Del(key []byte, flag db.Flag) (err error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	defer t.done(&err)
 	if t.flags&bRdOnly != 0 {
 		return db.ErrReadOnly

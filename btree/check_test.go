@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"testing"
@@ -135,5 +136,53 @@ func TestCacheLimit(t *testing.T) {
 	}
 	if err := d.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestSeqInterleaved interleaves a scan with puts and deletes, checking
+// the cursor stays on a valid entry, as 1.85 lost it in some splits.
+func TestSeqInterleaved(t *testing.T) {
+	for seed := range uint64(50) {
+		d, _ := New(nil, &Info{PageSize: 512})
+		r := rand.New(rand.NewPCG(seed, 1))
+		for i := range 500 {
+			k, v := dbtest.Gen(i)
+			d.Put(k, v, 0)
+		}
+		flag := db.RFirst
+		var lastKind int
+		for op := range 3000 {
+			kind := r.IntN(3)
+			lastKind = kind
+			switch kind {
+			case 0:
+				_, _, err := d.Seq(nil, flag)
+				if errors.Is(err, db.ErrNotFound) {
+					flag = db.RFirst
+					continue
+				}
+				if err != nil {
+					t.Fatal(seed, op, err)
+				}
+				flag = db.RNext
+			case 1:
+				k, v := dbtest.Gen(500 + r.IntN(1500))
+				d.Put(k, v, 0)
+			case 2:
+				k, _ := dbtest.Gen(500 + r.IntN(1500))
+				d.Del(k, 0)
+			}
+			if op%100 == 0 {
+				if err := d.check(); err != nil {
+					t.Fatal(seed, op, err)
+				}
+			}
+			if c := d.cursor; c.flags&cursInit != 0 && c.flags&cursAcquire == 0 {
+				h, _ := d.get(c.pg.pgno)
+				if !h.isType(pBLeaf) || c.pg.index < 0 || c.pg.index >= h.nextIndex() {
+					t.Fatalf("seed %d op %d (kind %d): cursor %+v flags %x on page type %x n=%d", seed, op, lastKind, c.pg, c.flags, h.flags(), h.nextIndex())
+				}
+			}
+		}
 	}
 }
