@@ -12,17 +12,18 @@ type Flag uint
 
 // Routine flags
 const (
-	RCursor      Flag = iota + 1 // del, put, seq
-	_                            // unused
-	RFirst                       // seq
-	RIAfter                      // put (recno)
-	RIBefore                     // put (recno)
-	RLast                        // seq (btree, recno)
-	RNext                        // seq
-	RNoOverwrite                 // put
-	RPrev                        // seq (btree, recno)
-	RSetCursor                   // put (recno)
-	RRecnoSync                   // sync (recno)
+	RNone        Flag = iota // no flag
+	RCursor                  // del, put, seq
+	_                        // unused
+	RFirst                   // seq
+	RIAfter                  // put (recno)
+	RIBefore                 // put (recno)
+	RLast                    // seq (btree, recno)
+	RNext                    // seq
+	RNoOverwrite             // put
+	RPrev                    // seq (btree, recno)
+	RSetCursor               // put (recno)
+	RRecnoSync               // sync (recno)
 )
 
 // Errors returned by the access methods, to be checked with errors.Is.

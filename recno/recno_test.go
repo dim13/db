@@ -61,7 +61,7 @@ func TestModel(t *testing.T) {
 		}
 		switch n := r.IntN(len(m) + 1); r.IntN(5) {
 		case 0, 1: // append
-			if _, err := d.Put(key(len(m)+1), data, 0); err != nil {
+			if _, err := d.Put(key(len(m)+1), data, db.RNone); err != nil {
 				t.Fatal(op, err)
 			}
 			m = append(m, data)
@@ -77,7 +77,7 @@ func TestModel(t *testing.T) {
 			if n == 0 {
 				continue
 			}
-			if _, err := d.Put(key(n), data, 0); err != nil {
+			if _, err := d.Put(key(n), data, db.RNone); err != nil {
 				t.Fatal(op, err)
 			}
 			m[n-1] = data
@@ -85,7 +85,7 @@ func TestModel(t *testing.T) {
 			if n == 0 {
 				continue
 			}
-			if err := d.Del(key(n), 0); err != nil {
+			if err := d.Del(key(n), db.RNone); err != nil {
 				t.Fatal(op, err)
 			}
 			m = slices.Delete(m, n-1, n)
@@ -94,7 +94,7 @@ func TestModel(t *testing.T) {
 	check := func(d db.DB) {
 		t.Helper()
 		for i, want := range m {
-			got, err := d.Get(key(i+1), 0)
+			got, err := d.Get(key(i+1), db.RNone)
 			if err != nil || !bytes.Equal(got, want) {
 				t.Fatalf("get %d: %v", i+1, err)
 			}
@@ -133,10 +133,10 @@ func TestFixedLen(t *testing.T) {
 	if got := dump(t, d); fmt.Sprintf("%q", got) != `["aaaa" "bbbb" "cc  "]` {
 		t.Errorf("got %q", got)
 	}
-	if _, err := d.Put(key(5), []byte("e"), 0); err != nil {
+	if _, err := d.Put(key(5), []byte("e"), db.RNone); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.Put(key(1), []byte("toolong"), 0); err != db.ErrInvalid {
+	if _, err := d.Put(key(1), []byte("toolong"), db.RNone); err != db.ErrInvalid {
 		t.Errorf("got %v, want %v", err, db.ErrInvalid)
 	}
 	d.Close()
@@ -152,7 +152,7 @@ func TestCursor(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 1; i <= 5; i++ {
-		d.Put(key(i), []byte{byte('0' + i)}, 0)
+		d.Put(key(i), []byte{byte('0' + i)}, db.RNone)
 	}
 	k, v, err := d.Seq(key(3), db.RCursor)
 	if err != nil || string(v) != "3" || binary.NativeEndian.Uint32(k) != 3 {
@@ -203,7 +203,7 @@ func TestPutKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 1; i <= 3; i++ {
-		d.Put(key(i), []byte("x"), 0)
+		d.Put(key(i), []byte("x"), db.RNone)
 	}
 	testCases := []struct {
 		name string

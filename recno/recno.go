@@ -143,7 +143,7 @@ func (r *DB) Close() error {
 	t := r.t
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if err := r.sync(0); err != nil {
+	if err := r.sync(db.RNone); err != nil {
 		return err
 	}
 	var err error
@@ -172,7 +172,7 @@ func (r *DB) Get(key []byte, flag db.Flag) (data []byte, err error) {
 	if err != nil {
 		return nil, err
 	}
-	if flag != 0 || nrec == 0 {
+	if flag != db.RNone || nrec == 0 {
 		return nil, db.ErrInvalid
 	}
 
@@ -365,7 +365,7 @@ func (r *DB) Del(key []byte, flag db.Flag) (err error) {
 		return db.ErrReadOnly
 	}
 	switch flag {
-	case 0:
+	case db.RNone:
 		nrec, kerr := keyNum(key)
 		if kerr != nil || nrec == 0 {
 			return db.ErrInvalid
@@ -564,7 +564,7 @@ func (r *DB) Sync(flag db.Flag) error {
 func (r *DB) sync(flag db.Flag) error {
 	t := r.t
 	switch flag {
-	case 0:
+	case db.RNone:
 	case db.RRecnoSync:
 		return t.sync()
 	default:

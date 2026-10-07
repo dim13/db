@@ -71,7 +71,7 @@ func TestDup(t *testing.T) {
 	}
 	for i := range 300 {
 		for _, k := range []string{"a", "b", "c"} {
-			if _, err := d.Put([]byte(k), fmt.Appendf(nil, "%s%03d", k, i), 0); err != nil {
+			if _, err := d.Put([]byte(k), fmt.Appendf(nil, "%s%03d", k, i), db.RNone); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -99,7 +99,7 @@ func TestDup(t *testing.T) {
 	if n != 300 || string(k) != "c" {
 		t.Fatalf("got %d b's then %q", n, k)
 	}
-	if err := d.Del([]byte("a"), 0); err != nil {
+	if err := d.Del([]byte("a"), db.RNone); err != nil {
 		t.Fatal(err)
 	}
 	counts := map[string]int{}
@@ -113,14 +113,14 @@ func TestDup(t *testing.T) {
 	if fmt.Sprint(counts) != "map[b:150 c:300]" {
 		t.Errorf("got %v", counts)
 	}
-	if _, err := d.Get([]byte("a"), 0); err != db.ErrNotFound {
+	if _, err := d.Get([]byte("a"), db.RNone); err != db.ErrNotFound {
 		t.Errorf("got %v, want %v", err, db.ErrNotFound)
 	}
 }
 
 func TestNoOverwrite(t *testing.T) {
 	d, _ := New(nil, nil)
-	d.Put([]byte("k"), []byte("v"), 0)
+	d.Put([]byte("k"), []byte("v"), db.RNone)
 	if _, err := d.Put([]byte("k"), []byte("w"), db.RNoOverwrite); err != db.ErrKeyExist {
 		t.Errorf("got %v, want %v", err, db.ErrKeyExist)
 	}
@@ -130,7 +130,7 @@ func TestNoOverwrite(t *testing.T) {
 	if _, err := d.Put([]byte("k"), []byte("w"), db.RCursor); err != nil {
 		t.Fatal(err)
 	}
-	if v, _ := d.Get([]byte("k"), 0); string(v) != "w" {
+	if v, _ := d.Get([]byte("k"), db.RNone); string(v) != "w" {
 		t.Errorf("got %q", v)
 	}
 }
@@ -162,7 +162,7 @@ func TestLibc(t *testing.T) {
 
 func TestPutKey(t *testing.T) {
 	d, _ := New(nil, nil)
-	k, err := d.Put([]byte("key"), []byte("value"), 0)
+	k, err := d.Put([]byte("key"), []byte("value"), db.RNone)
 	if err != nil || string(k) != "key" {
 		t.Errorf("got %q, %v", k, err)
 	}
@@ -219,13 +219,13 @@ func BenchmarkGet(b *testing.B) {
 	keys := make([][]byte, 10000)
 	for i := range keys {
 		k, v := dbtest.Gen(i)
-		d.Put(k, v, 0)
+		d.Put(k, v, db.RNone)
 		keys[i] = k
 	}
 	b.Run("serial", func(b *testing.B) {
 		var i int
 		for b.Loop() {
-			d.Get(keys[i%len(keys)], 0)
+			d.Get(keys[i%len(keys)], db.RNone)
 			i++
 		}
 	})
@@ -233,7 +233,7 @@ func BenchmarkGet(b *testing.B) {
 		b.RunParallel(func(pb *testing.PB) {
 			var i int
 			for pb.Next() {
-				d.Get(keys[i%len(keys)], 0)
+				d.Get(keys[i%len(keys)], db.RNone)
 				i++
 			}
 		})

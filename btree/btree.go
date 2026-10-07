@@ -297,11 +297,11 @@ func (t *DB) done(err *error) {
 	}
 }
 
-// Sync writes all changes to disk, flag must be 0, otherwise it returns ErrInvalid.
+// Sync writes all changes to disk, flag must be db.RNone, otherwise it returns ErrInvalid.
 func (t *DB) Sync(flag db.Flag) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if flag != 0 {
+	if flag != db.RNone {
 		return db.ErrInvalid
 	}
 	return t.sync()
@@ -616,7 +616,7 @@ func (t *DB) Get(key []byte, flag db.Flag) (data []byte, err error) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	defer t.done(&err)
-	if flag != 0 {
+	if flag != db.RNone {
 		return nil, db.ErrInvalid
 	}
 	e, exact, _, err := t.lookup(key, nil)
@@ -650,7 +650,7 @@ func (t *DB) put(key, data []byte, flag db.Flag) error {
 		return db.ErrReadOnly
 	}
 	switch flag {
-	case 0, db.RNoOverwrite:
+	case db.RNone, db.RNoOverwrite:
 	case db.RCursor:
 		// Must already have started a scan and not have already deleted it.
 		if t.cursor.flags.IsSet(cursInit) && t.cursor.flags.IsClr(cursAcquire|cursAfter|cursBefore) {

@@ -307,11 +307,11 @@ func (h *DB) Fd() uintptr {
 	return h.file.Fd()
 }
 
-// Sync writes all changes to disk, flag must be 0.
+// Sync writes all changes to disk, flag must be db.RNone.
 func (h *DB) Sync(flag db.Flag) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if flag != 0 {
+	if flag != db.RNone {
 		return db.ErrInvalid
 	}
 	return h.sync()
@@ -528,7 +528,7 @@ func (h *DB) Get(key []byte, flag db.Flag) (data []byte, err error) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	defer h.done(&err)
-	if flag != 0 {
+	if flag != db.RNone {
 		return nil, db.ErrInvalid
 	}
 	return h.access(actionGet, key, nil)
@@ -545,7 +545,7 @@ func (h *DB) Put(key, data []byte, flag db.Flag) (rkey []byte, err error) {
 	}
 	act := actionPut
 	switch flag {
-	case 0:
+	case db.RNone:
 	case db.RNoOverwrite:
 		act = actionPutNew
 	default:
@@ -562,7 +562,7 @@ func (h *DB) Del(key []byte, flag db.Flag) (err error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	defer h.done(&err)
-	if flag != 0 && flag != db.RCursor {
+	if flag != db.RNone && flag != db.RCursor {
 		return db.ErrInvalid
 	}
 	if h.readOnly {
@@ -676,7 +676,7 @@ func (h *DB) Seq(_ []byte, flag db.Flag) (rkey, data []byte, err error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	defer h.done(&err)
-	if flag != 0 && flag != db.RFirst && flag != db.RNext {
+	if flag != db.RNone && flag != db.RFirst && flag != db.RNext {
 		return nil, nil, db.ErrInvalid
 	}
 	if h.cbucket < 0 || flag == db.RFirst {

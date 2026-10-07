@@ -62,7 +62,7 @@ func (t *Table) Search(e Entry, a Action) (Entry, error) {
 		}
 		return e, nil
 	case Find:
-		data, err := t.h.Get(key, 0)
+		data, err := t.h.Get(key, db.RNone)
 		if err != nil {
 			return Entry{}, err
 		}

@@ -44,7 +44,7 @@ func TestAliases(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, err := d.Get(k, 0)
+		got, err := d.Get(k, db.RNone)
 		if err != nil || string(got) != string(v) {
 			t.Fatalf("get %q: %v", k, err)
 		}
@@ -172,7 +172,7 @@ func TestSeqAfterDelete(t *testing.T) {
 	h, _ := New(nil, &Info{BucketSize: 512})
 	for i := range 2000 {
 		k, v := dbtest.Gen(i)
-		h.Put(k, v, 0)
+		h.Put(k, v, db.RNone)
 	}
 	for flag := db.RFirst; ; flag = db.RNext {
 		k, _, err := h.Seq(nil, flag)
@@ -182,11 +182,11 @@ func TestSeqAfterDelete(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		h.Del(k, 0) // delete what was just returned
+		h.Del(k, db.RNone) // delete what was just returned
 		if len(k)%3 == 0 {
 			for i := 0; i < 2000; i += 7 {
 				k, _ := dbtest.Gen(i)
-				h.Del(k, 0)
+				h.Del(k, db.RNone)
 			}
 		}
 	}
@@ -197,13 +197,13 @@ func BenchmarkGet(b *testing.B) {
 	keys := make([][]byte, 10000)
 	for i := range keys {
 		k, v := dbtest.Gen(i)
-		d.Put(k, v, 0)
+		d.Put(k, v, db.RNone)
 		keys[i] = k
 	}
 	b.Run("serial", func(b *testing.B) {
 		var i int
 		for b.Loop() {
-			d.Get(keys[i%len(keys)], 0)
+			d.Get(keys[i%len(keys)], db.RNone)
 			i++
 		}
 	})
@@ -211,7 +211,7 @@ func BenchmarkGet(b *testing.B) {
 		b.RunParallel(func(pb *testing.PB) {
 			var i int
 			for pb.Next() {
-				d.Get(keys[i%len(keys)], 0)
+				d.Get(keys[i%len(keys)], db.RNone)
 				i++
 			}
 		})

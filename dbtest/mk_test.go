@@ -53,13 +53,13 @@ func TestMk(t *testing.T) {
 				k = binary.NativeEndian.AppendUint32(nil, uint32(i+1))
 				v = v[:len(v)%200]
 			}
-			if _, err := d.Put(k, v, 0); err != nil {
+			if _, err := d.Put(k, v, db.RNone); err != nil {
 				t.Fatal(name, i, err)
 			}
 		}
 		for i := 0; name != "recno" && i < 3000; i += 5 {
 			k, _ := dbtest.Gen(i)
-			if err := d.Del(k, 0); err != nil {
+			if err := d.Del(k, db.RNone); err != nil {
 				t.Fatal(name, i, err)
 			}
 		}

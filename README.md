@@ -32,8 +32,8 @@ if err != nil {
 }
 defer d.Close()
 
-d.Put([]byte("key"), []byte("value"), 0)
-v, err := d.Get([]byte("key"), 0)
+d.Put([]byte("key"), []byte("value"), db.RNone)
+v, err := d.Get([]byte("key"), db.RNone)
 if err != nil {
 	log.Fatal(err) // errors.Is(err, db.ErrNotFound) if missing
 }

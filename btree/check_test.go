@@ -71,7 +71,7 @@ func TestDupCheck(t *testing.T) {
 	}
 	for i := range 300 {
 		for _, k := range []string{"a", "b", "c"} {
-			if _, err := tr.Put([]byte(k), fmt.Appendf(nil, "%s%03d", k, i), 0); err != nil {
+			if _, err := tr.Put([]byte(k), fmt.Appendf(nil, "%s%03d", k, i), db.RNone); err != nil {
 				t.Fatal(err)
 			}
 			if err := tr.check(); err != nil {
@@ -91,7 +91,7 @@ func TestDupCheck(t *testing.T) {
 		}
 		k, _, err = tr.Seq(nil, db.RNext)
 	}
-	if err := tr.Del([]byte("a"), 0); err != nil {
+	if err := tr.Del([]byte("a"), db.RNone); err != nil {
 		t.Fatal(err)
 	}
 	if err := tr.check(); err != nil {
@@ -121,7 +121,7 @@ func TestCacheLimit(t *testing.T) {
 	}
 	for i := range 2000 {
 		k, v := dbtest.Gen(i)
-		if _, err := d.Put(k, v, 0); err != nil {
+		if _, err := d.Put(k, v, db.RNone); err != nil {
 			t.Fatal(err)
 		}
 		if got, want := d.mp.lru.Len(), minCache; got > want {
@@ -130,7 +130,7 @@ func TestCacheLimit(t *testing.T) {
 	}
 	for i := range 2000 {
 		k, v := dbtest.Gen(i)
-		if got, err := d.Get(k, 0); err != nil || !bytes.Equal(got, v) {
+		if got, err := d.Get(k, db.RNone); err != nil || !bytes.Equal(got, v) {
 			t.Fatalf("get %d: %v", i, err)
 		}
 	}
@@ -147,7 +147,7 @@ func TestSeqInterleaved(t *testing.T) {
 		r := rand.New(rand.NewPCG(seed, 1))
 		for i := range 500 {
 			k, v := dbtest.Gen(i)
-			d.Put(k, v, 0)
+			d.Put(k, v, db.RNone)
 		}
 		flag := db.RFirst
 		var lastKind int
@@ -167,10 +167,10 @@ func TestSeqInterleaved(t *testing.T) {
 				flag = db.RNext
 			case 1:
 				k, v := dbtest.Gen(500 + r.IntN(1500))
-				d.Put(k, v, 0)
+				d.Put(k, v, db.RNone)
 			case 2:
 				k, _ := dbtest.Gen(500 + r.IntN(1500))
-				d.Del(k, 0)
+				d.Del(k, db.RNone)
 			}
 			if op%100 == 0 {
 				if err := d.check(); err != nil {

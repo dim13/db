@@ -31,11 +31,11 @@ func Example() {
 		log.Fatal(err)
 	}
 
-	v, _ := d.Get(key(2), 0)
+	v, _ := d.Get(key(2), db.RNone)
 	fmt.Printf("%s\n", v)
 
-	d.Del(key(1), 0)                          // "two" becomes record 1
-	d.Put(key(3), []byte("four"), 0)          // append
+	d.Del(key(1), db.RNone)                   // "two" becomes record 1
+	d.Put(key(3), []byte("four"), db.RNone)   // append
 	d.Put(key(1), []byte("one"), db.RIBefore) // insert at the front
 	if err := d.Close(); err != nil {         // writes the file back
 		log.Fatal(err)

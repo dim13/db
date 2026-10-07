@@ -17,12 +17,12 @@ func Example() {
 	defer d.Close()
 
 	for _, k := range []string{"cherry", "apple", "banana"} {
-		if _, err := d.Put([]byte(k), []byte(k[:1]), 0); err != nil {
+		if _, err := d.Put([]byte(k), []byte(k[:1]), db.RNone); err != nil {
 			log.Fatal(err)
 		}
 	}
 
-	v, err := d.Get([]byte("banana"), 0)
+	v, err := d.Get([]byte("banana"), db.RNone)
 	fmt.Printf("%s %v\n", v, err)
 
 	for flag := db.RFirst; ; flag = db.RNext {
@@ -46,7 +46,7 @@ func ExampleDB_Seq() {
 	d, _ := btree.New(nil, nil)
 	defer d.Close()
 	for _, k := range []string{"a1", "b1", "b2", "c1"} {
-		d.Put([]byte(k), nil, 0)
+		d.Put([]byte(k), nil, db.RNone)
 	}
 
 	// Position at the first key not less than "b".

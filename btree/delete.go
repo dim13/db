@@ -12,7 +12,7 @@ func (t *DB) Del(key []byte, flag db.Flag) (err error) {
 		return db.ErrReadOnly
 	}
 	switch flag {
-	case 0:
+	case db.RNone:
 		err = t.bdelete(key)
 	case db.RCursor:
 		// Must already have started a scan and not have already deleted it.

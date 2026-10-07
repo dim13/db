@@ -59,7 +59,7 @@ func (d *DBM) Close() error {
 
 // Fetch returns the content stored under key, or db.ErrNotFound.
 func (d *DBM) Fetch(key []byte) ([]byte, error) {
-	return d.h.Get(key, 0)
+	return d.h.Get(key, db.RNone)
 }
 
 // Store stores content under key.  With Insert an existing key is kept and
@@ -75,7 +75,7 @@ func (d *DBM) Store(key, content []byte, mode Mode) error {
 
 // Delete deletes key, or returns db.ErrNotFound.
 func (d *DBM) Delete(key []byte) error {
-	return d.h.Del(key, 0)
+	return d.h.Del(key, db.RNone)
 }
 
 // FirstKey returns the first key in hash order, or db.ErrNotFound if the

@@ -109,15 +109,15 @@ func TestStress(t *testing.T) {
 			switch r.IntN(4) {
 			case 0, 1:
 				desc = fmt.Sprintf("put %d (%d,%d)", i, len(key), len(data))
-				_, err = h.Put(key, data, 0)
+				_, err = h.Put(key, data, db.RNone)
 			case 2:
 				desc = fmt.Sprintf("del %d", i)
-				if err = h.Del(key, 0); err == db.ErrNotFound {
+				if err = h.Del(key, db.RNone); err == db.ErrNotFound {
 					err = nil
 				}
 			case 3:
 				desc = fmt.Sprintf("get %d", i)
-				if _, err = h.Get(key, 0); err == db.ErrNotFound {
+				if _, err = h.Get(key, db.RNone); err == db.ErrNotFound {
 					err = nil
 				}
 			}
@@ -151,7 +151,7 @@ func TestCacheLimit(t *testing.T) {
 	}
 	for i := range 3000 {
 		k, v := dbtest.Gen(i)
-		if _, err := h.Put(k, v, 0); err != nil {
+		if _, err := h.Put(k, v, db.RNone); err != nil {
 			t.Fatal(err)
 		}
 		check(fmt.Sprintf("put %d", i))
@@ -173,7 +173,7 @@ func TestCacheLimit(t *testing.T) {
 	}
 	for i := range 3000 {
 		k, v := dbtest.Gen(i)
-		if got, err := h.Get(k, 0); err != nil || !bytes.Equal(got, v) {
+		if got, err := h.Get(k, db.RNone); err != nil || !bytes.Equal(got, v) {
 			t.Fatalf("get %d: %v", i, err)
 		}
 	}

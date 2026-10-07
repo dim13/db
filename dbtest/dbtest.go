@@ -106,18 +106,18 @@ func Model(d db.DB, n int, reopen func(db.DB) (db.DB, error)) (db.DB, error) {
 		}
 		switch r.IntN(4) {
 		case 0, 1:
-			if _, err := d.Put(key, data, 0); err != nil {
+			if _, err := d.Put(key, data, db.RNone); err != nil {
 				return d, fmt.Errorf("op %d put %d: %w", op, i, err)
 			}
 			m[string(key)] = data
 		case 2:
-			err := d.Del(key, 0)
+			err := d.Del(key, db.RNone)
 			if _, ok := m[string(key)]; ok != (err == nil) {
 				return d, fmt.Errorf("op %d del %d: %v, in model %v", op, i, err, ok)
 			}
 			delete(m, string(key))
 		case 3:
-			got, err := d.Get(key, 0)
+			got, err := d.Get(key, db.RNone)
 			want, ok := m[string(key)]
 			if ok != (err == nil) || !bytes.Equal(got, want) {
 				return d, fmt.Errorf("op %d get %d: %v, in model %v", op, i, err, ok)
@@ -131,7 +131,7 @@ func Model(d db.DB, n int, reopen func(db.DB) (db.DB, error)) (db.DB, error) {
 		}
 	}
 	for k, want := range m {
-		got, err := d.Get([]byte(k), 0)
+		got, err := d.Get([]byte(k), db.RNone)
 		if err != nil || !bytes.Equal(got, want) {
 			return d, fmt.Errorf("final get %.20q: %v", k, err)
 		}
@@ -174,13 +174,13 @@ func Expect(n int) []string {
 // ReadOnly checks that d refuses changes, still reads key, and closes
 // cleanly.
 func ReadOnly(d db.DB, key []byte) error {
-	if _, err := d.Put(key, []byte("x"), 0); !errors.Is(err, db.ErrReadOnly) {
+	if _, err := d.Put(key, []byte("x"), db.RNone); !errors.Is(err, db.ErrReadOnly) {
 		return fmt.Errorf("put: got %v, want %v", err, db.ErrReadOnly)
 	}
-	if err := d.Del(key, 0); !errors.Is(err, db.ErrReadOnly) {
+	if err := d.Del(key, db.RNone); !errors.Is(err, db.ErrReadOnly) {
 		return fmt.Errorf("del: got %v, want %v", err, db.ErrReadOnly)
 	}
-	if _, err := d.Get(key, 0); err != nil {
+	if _, err := d.Get(key, db.RNone); err != nil {
 		return fmt.Errorf("get: %w", err)
 	}
 	if err := d.Close(); err != nil {
@@ -195,7 +195,7 @@ func ReadOnly(d db.DB, key []byte) error {
 func Concurrent(d db.DB, n int) error {
 	for i := range n {
 		k, v := Gen(i)
-		if _, err := d.Put(k, v, 0); err != nil {
+		if _, err := d.Put(k, v, db.RNone); err != nil {
 			return err
 		}
 	}
@@ -206,7 +206,7 @@ func Concurrent(d db.DB, n int) error {
 			for i := range n {
 				i = (i + r*n/4) % n
 				k, want := Gen(i)
-				got, err := d.Get(k, 0)
+				got, err := d.Get(k, db.RNone)
 				if err != nil || !bytes.Equal(got, want) {
 					errc <- fmt.Errorf("reader %d get %d: %v", r, i, err)
 					return
@@ -218,12 +218,12 @@ func Concurrent(d db.DB, n int) error {
 		wg.Go(func() {
 			for i := n + w; i < 2*n; i += 2 {
 				k, v := Gen(i)
-				if _, err := d.Put(k, v, 0); err != nil {
+				if _, err := d.Put(k, v, db.RNone); err != nil {
 					errc <- fmt.Errorf("writer %d put %d: %w", w, i, err)
 					return
 				}
 				if i%3 == 0 {
-					if err := d.Del(k, 0); err != nil {
+					if err := d.Del(k, db.RNone); err != nil {
 						errc <- fmt.Errorf("writer %d del %d: %w", w, i, err)
 						return
 					}

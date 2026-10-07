@@ -50,14 +50,14 @@ func TestCacheLimit(t *testing.T) {
 	}
 	check("seq last")
 	for i, rec := range want {
-		got, err := d.Get(key(i+1), 0)
+		got, err := d.Get(key(i+1), db.RNone)
 		if err != nil || !bytes.Equal(got, rec) {
 			t.Fatalf("get %d: %v", i+1, err)
 		}
 	}
 	check("get")
 
-	if err := d.Del(key(1), 0); err != nil {
+	if err := d.Del(key(1), db.RNone); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := d.Put(key(1), []byte("first"), db.RIBefore); err != nil {
@@ -120,7 +120,7 @@ func TestConcurrent(t *testing.T) {
 					for i := range n {
 						i = (i+r*n/4)%n + 1
 						want := fmt.Appendf(nil, "record %d %s", i, bytes.Repeat([]byte("x"), (i-1)%300))
-						got, err := d.Get(key(i), 0)
+						got, err := d.Get(key(i), db.RNone)
 						if err != nil || !bytes.Equal(got, want) {
 							errc <- fmt.Errorf("reader %d get %d: %q %v", r, i, got, err)
 							return
@@ -137,7 +137,7 @@ func TestConcurrent(t *testing.T) {
 							return
 						}
 						if i%2 == 0 {
-							if err := d.Del(key(n+1), 0); err != nil {
+							if err := d.Del(key(n+1), db.RNone); err != nil {
 								errc <- fmt.Errorf("writer %d del: %w", w, err)
 								return
 							}

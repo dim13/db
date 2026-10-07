@@ -24,14 +24,14 @@ func Example() {
 	}
 	defer d.Close()
 
-	d.Put([]byte("key"), []byte("value"), 0)
-	v, _ := d.Get([]byte("key"), 0)
+	d.Put([]byte("key"), []byte("value"), db.RNone)
+	v, _ := d.Get([]byte("key"), db.RNone)
 	fmt.Printf("%s\n", v)
 
 	_, err = d.Put([]byte("key"), []byte("other"), db.RNoOverwrite)
 	fmt.Println(errors.Is(err, db.ErrKeyExist))
 
-	_, err = d.Get([]byte("missing"), 0)
+	_, err = d.Get([]byte("missing"), db.RNone)
 	fmt.Println(errors.Is(err, db.ErrNotFound))
 	// Output:
 	// value
