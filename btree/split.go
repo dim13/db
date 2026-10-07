@@ -315,7 +315,7 @@ func (t *DB) psplit(h, l, r page, pskip *int, ilen int) (left bool, err error) {
 	// 1.85, count the open slot too when it is on the left page, which
 	// holds off+1 entries.
 	c := &t.cursor
-	if c.flags&cursInit != 0 && c.pg.pgno == h.pgno() {
+	if c.flags.IsSet(cursInit) && c.pg.pgno == h.pgno() {
 		if c.pg.index >= skip {
 			c.pg.index++
 		}

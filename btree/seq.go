@@ -14,7 +14,7 @@ func (t *DB) Seq(key []byte, flag db.Flag) (rkey, data []byte, err error) {
 	var e epg
 	switch flag {
 	case db.RNext, db.RPrev:
-		if t.cursor.flags&cursInit != 0 {
+		if t.cursor.flags.IsSet(cursInit) {
 			e, err = t.seqadv(flag)
 			break
 		}
@@ -81,7 +81,7 @@ func (t *DB) seqadv(flag db.Flag) (epg, error) {
 	// The cursor was deleted where there weren't any duplicate records,
 	// so the key was saved.  Find out where that key would go in the
 	// current tree.
-	if c.flags&cursAcquire != 0 {
+	if c.flags.IsSet(cursAcquire) {
 		return t.first(c.key)
 	}
 
@@ -94,8 +94,8 @@ func (t *DB) seqadv(flag db.Flag) (epg, error) {
 	case db.RNext:
 		// The cursor was deleted in duplicate records, and moved
 		// forward to a record that has yet to be returned.
-		if c.flags&cursAfter != 0 {
-			c.flags &^= cursAfter | cursBefore
+		if c.flags.IsSet(cursAfter) {
+			c.flags.Clr(cursAfter | cursBefore)
 			return epg{page: h, index: index}, nil
 		}
 		if index++; index == h.nextIndex() {
@@ -109,8 +109,8 @@ func (t *DB) seqadv(flag db.Flag) (epg, error) {
 			index = 0
 		}
 	default:
-		if c.flags&cursBefore != 0 {
-			c.flags &^= cursAfter | cursBefore
+		if c.flags.IsSet(cursBefore) {
+			c.flags.Clr(cursAfter | cursBefore)
 			return epg{page: h, index: index}, nil
 		}
 		if index == 0 {
@@ -136,7 +136,7 @@ func (t *DB) first(key []byte) (epg, error) {
 		return epg{}, err
 	}
 	if exact {
-		if t.flags&bNoDups != 0 {
+		if t.flags.IsSet(bNoDups) {
 			return *ep, nil
 		}
 		// Walk backwards, as long as the entry matches and there are
@@ -185,7 +185,7 @@ func (t *DB) first(key []byte) (epg, error) {
 // setcur sets the cursor to an entry in the tree.
 func (t *DB) setcur(pgno uint32, index int) {
 	t.cursor.key = nil
-	t.cursor.flags &^= cursAcquire | cursAfter | cursBefore
+	t.cursor.flags.Clr(cursAcquire | cursAfter | cursBefore)
 	t.cursor.pg = epgno{pgno: pgno, index: index}
-	t.cursor.flags |= cursInit
+	t.cursor.flags.Set(cursInit)
 }

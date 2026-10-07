@@ -8,7 +8,7 @@ func (t *DB) Del(key []byte, flag db.Flag) (err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	defer t.done(&err)
-	if t.flags&bRdOnly != 0 {
+	if t.flags.IsSet(bRdOnly) {
 		return db.ErrReadOnly
 	}
 	switch flag {
@@ -17,10 +17,10 @@ func (t *DB) Del(key []byte, flag db.Flag) (err error) {
 	case db.RCursor:
 		// Must already have started a scan and not have already deleted it.
 		c := &t.cursor
-		if c.flags&cursInit == 0 {
+		if c.flags.IsClr(cursInit) {
 			return db.ErrInvalid
 		}
-		if c.flags&(cursAcquire|cursAfter|cursBefore) != 0 {
+		if c.flags.IsSet(cursAcquire | cursAfter | cursBefore) {
 			return db.ErrNotFound
 		}
 		h, err := t.get(c.pg.pgno)
@@ -47,7 +47,7 @@ func (t *DB) Del(key []byte, flag db.Flag) (err error) {
 		return db.ErrInvalid
 	}
 	if err == nil {
-		t.flags |= bModified
+		t.flags.Set(bModified)
 	}
 	return err
 }
@@ -180,7 +180,7 @@ func (t *DB) bdelete(key []byte) error {
 				return err
 			}
 			t.dirty(h)
-			if t.flags&bNoDups != 0 {
+			if t.flags.IsSet(bNoDups) {
 				if h.nextIndex() == 0 {
 					return t.pdeleteKey(key, h)
 				}
@@ -307,7 +307,7 @@ func (t *DB) pdelete(h page) error {
 func (t *DB) dleaf(key []byte, h page, index int) error {
 	c := &t.cursor
 	// If this record is referenced by the cursor, delete the cursor.
-	if c.flags&cursInit != 0 && c.flags&cursAcquire == 0 &&
+	if c.flags.IsSet(cursInit) && c.flags.IsClr(cursAcquire) &&
 		c.pg.pgno == h.pgno() && c.pg.index == index {
 		if err := t.curdel(key, h, index); err != nil {
 			return err
@@ -329,7 +329,7 @@ func (t *DB) dleaf(key []byte, h page, index int) error {
 	h.removeItem(index, nbleafdbt(bl.ksize, bl.dsize))
 
 	// If the cursor is on this page, adjust it as necessary.
-	if c.flags&cursInit != 0 && c.flags&cursAcquire == 0 &&
+	if c.flags.IsSet(cursInit) && c.flags.IsClr(cursAcquire) &&
 		c.pg.pgno == h.pgno() && c.pg.index > index {
 		c.pg.index--
 	}
@@ -341,10 +341,10 @@ func (t *DB) curdel(key []byte, h page, index int) error {
 	// If there are duplicates, move forward or backward to one.
 	// Otherwise, copy the key into the cursor area.
 	c := &t.cursor
-	c.flags &^= cursAfter | cursBefore | cursAcquire
+	c.flags.Clr(cursAfter | cursBefore | cursAcquire)
 
 	var curcopy bool
-	if t.flags&bNoDups == 0 {
+	if t.flags.IsClr(bNoDups) {
 		// We're going to have to do comparisons.  If we weren't
 		// provided a copy of the key, i.e. the user is deleting
 		// the current cursor position, get one.
@@ -393,7 +393,7 @@ func (t *DB) curdel(key []byte, h page, index int) error {
 				return err
 			}
 			if eq {
-				c.flags |= cd.flag
+				c.flags.Set(cd.flag)
 				c.pg = epgno{pgno: e.page.pgno(), index: e.index}
 				return nil
 			}
@@ -406,7 +406,7 @@ func (t *DB) curdel(key []byte, h page, index int) error {
 		}
 		c.key = k
 	}
-	c.flags |= cursAcquire
+	c.flags.Set(cursAcquire)
 	return nil
 }
 

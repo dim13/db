@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/dim13/db"
+	"github.com/dim13/db/flags"
 )
 
 const (
@@ -83,7 +84,7 @@ type epg struct {
 type cursor struct {
 	pg    epgno  // saved tree reference
 	key   []byte // saved key, or nil
-	flags uint8
+	flags flags.Set[uint8]
 }
 
 // DB is an open B-Tree database, safe for concurrent use: Get calls run in
@@ -105,7 +106,7 @@ type DB struct {
 	last     epgno // last insert
 	cmp      func(a, b []byte) int
 	pfx      func(a, b []byte) int
-	flags    uint32
+	flags    flags.Set[uint32]
 	nrecs    uint32 // meta-data, preserved
 }
 
@@ -155,12 +156,12 @@ func New(file *os.File, info *Info) (*DB, error) {
 	}
 
 	if b.ReadOnly {
-		t.flags |= bRdOnly
+		t.flags.Set(bRdOnly)
 	}
 
 	var size int64
 	if file == nil {
-		t.flags |= bInMem
+		t.flags.Set(bInMem)
 	} else {
 		fi, err := file.Stat()
 		if err != nil {
@@ -189,7 +190,7 @@ func New(file *os.File, info *Info) (*DB, error) {
 			return nil, fmt.Errorf("%w: meta", db.ErrFormat)
 		}
 		b.PageSize = psize
-		t.flags |= flags
+		t.flags.Set(flags)
 		t.free = mv.u32(12)
 		t.nrecs = mv.u32(16)
 	} else {
@@ -197,7 +198,7 @@ func New(file *os.File, info *Info) (*DB, error) {
 			b.PageSize = defPSize
 		}
 		if b.Flags&RDup == 0 {
-			t.flags |= bNoDups
+			t.flags.Set(bNoDups)
 		}
 		t.free = pInvalid
 	}
@@ -212,7 +213,7 @@ func New(file *os.File, info *Info) (*DB, error) {
 		b.CacheSize = defCacheSize
 	}
 	t.mp = newMpool(file, t.psize, size, max(b.CacheSize/t.psize, minCache))
-	t.mp.noWrite = t.flags&bRdOnly != 0
+	t.mp.noWrite = t.flags.IsSet(bRdOnly)
 	if err := t.nroot(); err != nil {
 		return nil, err
 	}
@@ -232,7 +233,7 @@ func (t *DB) nroot() error {
 		return fmt.Errorf("%w: root page %d", db.ErrFormat, npg)
 	}
 	t.page(b).init(npg, pInvalid, pInvalid, pBLeaf, t.psize)
-	t.flags |= bModified
+	t.flags.Set(bModified)
 	return nil
 }
 
@@ -309,7 +310,7 @@ func (t *DB) Sync(flag db.Flag) error {
 // sync writes meta-data and dirty pages to disk and clears bModified.
 // It is a no-op for in-memory, read-only or unmodified trees; callers hold t.mu.
 func (t *DB) sync() error {
-	if t.flags&(bInMem|bRdOnly) != 0 || t.flags&bModified == 0 {
+	if t.flags.IsSet(bInMem|bRdOnly) || t.flags.IsClr(bModified) {
 		return nil
 	}
 	// Unlike 1.85, always write meta-data, so the free list and
@@ -320,7 +321,7 @@ func (t *DB) sync() error {
 	if err := t.mp.sync(); err != nil {
 		return err
 	}
-	t.flags &^= bModified
+	t.flags.Clr(bModified)
 	return nil
 }
 
@@ -337,7 +338,7 @@ func (t *DB) writeMeta() error {
 	m.setU32(8, uint32(t.psize))
 	m.setU32(12, t.free)
 	m.setU32(16, t.nrecs)
-	m.setU32(20, t.flags&bNoDups)
+	m.setU32(20, t.flags.Value(bNoDups))
 	t.mp.dirty(pMeta)
 	return nil
 }
@@ -558,7 +559,7 @@ func (t *DB) lookup(key []byte, stack *[]epgno) (cur epg, exact bool, leaf uint3
 		if !found {
 			// If it's a leaf page, we're almost done.
 			if h.isType(pBLeaf) {
-				if t.flags&bNoDups == 0 {
+				if t.flags.IsClr(bNoDups) {
 					var pg uint32
 					var index int
 					switch {
@@ -645,14 +646,14 @@ func (t *DB) Put(key, data []byte, flag db.Flag) (rkey []byte, err error) {
 // put inserts key/data, moving oversized items to overflow pages and splitting
 // the page if it is full; callers hold t.mu for writing.
 func (t *DB) put(key, data []byte, flag db.Flag) error {
-	if t.flags&bRdOnly != 0 {
+	if t.flags.IsSet(bRdOnly) {
 		return db.ErrReadOnly
 	}
 	switch flag {
 	case 0, db.RNoOverwrite:
 	case db.RCursor:
 		// Must already have started a scan and not have already deleted it.
-		if t.cursor.flags&cursInit != 0 && t.cursor.flags&(cursAcquire|cursAfter|cursBefore) == 0 {
+		if t.cursor.flags.IsSet(cursInit) && t.cursor.flags.IsClr(cursAcquire|cursAfter|cursBefore) {
 			break
 		}
 		fallthrough
@@ -719,7 +720,7 @@ func (t *DB) put(key, data []byte, flag db.Flag) error {
 		switch {
 		case flag == db.RNoOverwrite && exact:
 			return db.ErrKeyExist
-		case flag != db.RNoOverwrite && exact && t.flags&bNoDups != 0:
+		case flag != db.RNoOverwrite && exact && t.flags.IsSet(bNoDups):
 			// Note, the delete may empty the page, so we need to put a
 			// new entry into the page immediately.
 			if err := t.dleaf(skey, h, index); err != nil {
@@ -734,7 +735,7 @@ func (t *DB) put(key, data []byte, flag db.Flag) error {
 		if err := t.split(h, key, data, dflags, nbytes, index); err != nil {
 			return err
 		}
-		t.flags |= bModified
+		t.flags.Set(bModified)
 		return nil
 	}
 
@@ -744,7 +745,7 @@ func (t *DB) put(key, data []byte, flag db.Flag) error {
 	h.writeBLeaf(h.upper(), key, data, dflags)
 
 	// If the cursor is on this page, adjust it as necessary.
-	if t.cursor.flags&cursInit != 0 && t.cursor.flags&cursAcquire == 0 &&
+	if t.cursor.flags.IsSet(cursInit) && t.cursor.flags.IsClr(cursAcquire) &&
 		t.cursor.pg.pgno == h.pgno() && t.cursor.pg.index >= index {
 		t.cursor.pg.index++
 	}
@@ -764,7 +765,7 @@ func (t *DB) put(key, data []byte, flag db.Flag) error {
 	}
 
 	t.dirty(h)
-	t.flags |= bModified
+	t.flags.Set(bModified)
 	return nil
 }
 

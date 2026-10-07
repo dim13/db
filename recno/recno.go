@@ -74,7 +74,7 @@ func New(file *os.File, info *Info) (*DB, error) {
 
 	if info != nil {
 		if info.Flags&RFixedLen != 0 {
-			t.flags |= rFixLen
+			t.flags.Set(rFixLen)
 			t.reclen = info.RecordLen
 			if t.reclen <= 0 {
 				return nil, db.ErrInvalid
@@ -83,17 +83,17 @@ func New(file *os.File, info *Info) (*DB, error) {
 		t.bval = info.Delimiter
 	}
 	// Unlike C, where a given info with zero bval delimits by NUL.
-	if t.bval == 0 && t.flags&rFixLen == 0 {
+	if t.bval == 0 && t.flags.IsClr(rFixLen) {
 		t.bval = '\n'
 	}
 
-	t.flags |= rRecno
+	t.flags.Set(rRecno)
 	if info != nil && info.ReadOnly {
-		t.flags |= bRdOnly
+		t.flags.Set(bRdOnly)
 		t.mp.noWrite = true
 	}
 	if file == nil {
-		t.flags |= rEOF | rInMem
+		t.flags.Set(rEOF | rInMem)
 	} else {
 		t.rfile = file
 		fi, err := file.Stat()
@@ -102,10 +102,10 @@ func New(file *os.File, info *Info) (*DB, error) {
 		}
 		switch {
 		case !fi.Mode().IsRegular():
-			t.flags |= rRdOnly
+			t.flags.Set(rRdOnly)
 			t.rsrc = bufio.NewReader(file)
 		case fi.Size() == 0:
-			t.flags |= rEOF
+			t.flags.Set(rEOF)
 		default:
 			t.rsrc = bufio.NewReader(io.NewSectionReader(file, 0, fi.Size()))
 		}
@@ -121,7 +121,7 @@ func New(file *os.File, info *Info) (*DB, error) {
 		t.dirty(h)
 	}
 
-	if info != nil && info.Flags&RSnapshot != 0 && t.flags&(rEOF|rInMem) == 0 {
+	if info != nil && info.Flags&RSnapshot != 0 && t.flags.IsClr(rEOF|rInMem) {
 		if err := t.irec(math.MaxUint32); err != nil && err != db.ErrNotFound {
 			return nil, err
 		}
@@ -179,12 +179,12 @@ func (r *DB) Get(key []byte, flag db.Flag) (data []byte, err error) {
 	// Reading more of the flat file changes the tree, so it needs the
 	// write lock.
 	t.mu.RLock()
-	more := nrec > t.nrecs && t.flags&(rEOF|rInMem) == 0
+	more := nrec > t.nrecs && t.flags.IsClr(rEOF|rInMem)
 	t.mu.RUnlock()
 	if more {
 		t.mu.Lock()
 		defer t.mu.Unlock()
-		if nrec > t.nrecs && t.flags&(rEOF|rInMem) == 0 {
+		if nrec > t.nrecs && t.flags.IsClr(rEOF|rInMem) {
 			if err := t.irec(nrec); err != nil {
 				return nil, err
 			}
@@ -214,13 +214,13 @@ func (r *DB) Put(key, data []byte, flag db.Flag) (rkey []byte, err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	defer t.done(&err)
-	if t.flags&bRdOnly != 0 {
+	if t.flags.IsSet(bRdOnly) {
 		return nil, db.ErrReadOnly
 	}
 
 	// If using fixed-length records, and the record is long, return
 	// ErrInvalid.  If it's short, pad it out.
-	if t.flags&rFixLen != 0 && len(data) != t.reclen {
+	if t.flags.IsSet(rFixLen) && len(data) != t.reclen {
 		if len(data) > t.reclen {
 			return nil, db.ErrInvalid
 		}
@@ -230,7 +230,7 @@ func (r *DB) Put(key, data []byte, flag db.Flag) (rkey []byte, err error) {
 	var nrec uint32
 	switch flag {
 	case db.RCursor:
-		if t.cursor.flags&cursInit == 0 {
+		if t.cursor.flags.IsClr(cursInit) {
 			return nil, db.ErrInvalid
 		}
 		nrec = t.cursor.rcursor
@@ -265,14 +265,14 @@ func (r *DB) Put(key, data []byte, flag db.Flag) (rkey []byte, err error) {
 	// Make sure that records up to and including the put record are
 	// already in the database.  If skipping records, create empty ones.
 	if nrec > t.nrecs {
-		if t.flags&(rEOF|rInMem) == 0 {
+		if t.flags.IsClr(rEOF | rInMem) {
 			if err := t.irec(nrec); err != nil && err != db.ErrNotFound {
 				return nil, err
 			}
 		}
 		if nrec > t.nrecs+1 {
 			var empty []byte
-			if t.flags&rFixLen != 0 {
+			if t.flags.IsSet(rFixLen) {
 				empty = bytes.Repeat([]byte{t.bval}, t.reclen)
 			}
 			for nrec > t.nrecs+1 {
@@ -289,7 +289,7 @@ func (r *DB) Put(key, data []byte, flag db.Flag) (rkey []byte, err error) {
 	if flag == db.RSetCursor {
 		t.cursor.rcursor = nrec
 	}
-	t.flags |= rModified
+	t.flags.Set(rModified)
 	// The record inserted after nrec is nrec+1, as in libc (1.85 returns
 	// nrec).
 	if flag == db.RIAfter {
@@ -335,7 +335,7 @@ func (t *tree) iput(nrec uint32, data []byte, flag db.Flag) error {
 	}
 
 	// If not enough room, split the page.
-	t.flags |= bModified
+	t.flags.Set(bModified)
 	nbytes := nrleafdbt(len(data))
 	if h.upper()-h.lower() < nbytes+2 {
 		if err := t.split(h, data, dflags, nbytes, index); err != nil {
@@ -361,7 +361,7 @@ func (r *DB) Del(key []byte, flag db.Flag) (err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	defer t.done(&err)
-	if t.flags&bRdOnly != 0 {
+	if t.flags.IsSet(bRdOnly) {
 		return db.ErrReadOnly
 	}
 	switch flag {
@@ -375,7 +375,7 @@ func (r *DB) Del(key []byte, flag db.Flag) (err error) {
 		}
 		err = t.rdelete(nrec - 1)
 	case db.RCursor:
-		if t.cursor.flags&cursInit == 0 {
+		if t.cursor.flags.IsClr(cursInit) {
 			return db.ErrInvalid
 		}
 		if t.nrecs == 0 {
@@ -388,7 +388,7 @@ func (r *DB) Del(key []byte, flag db.Flag) (err error) {
 		return db.ErrInvalid
 	}
 	if err == nil {
-		t.flags |= bModified | rModified
+		t.flags.Set(bModified | rModified)
 	}
 	return err
 }
@@ -507,17 +507,17 @@ func (r *DB) Seq(key []byte, flag db.Flag) (rkey, data []byte, err error) {
 		nrec = n
 	case db.RNext, db.RFirst:
 		nrec = 1
-		if flag == db.RNext && t.cursor.flags&cursInit != 0 {
+		if flag == db.RNext && t.cursor.flags.IsSet(cursInit) {
 			nrec = t.cursor.rcursor + 1
 		}
 	case db.RPrev, db.RLast:
-		if flag == db.RPrev && t.cursor.flags&cursInit != 0 {
+		if flag == db.RPrev && t.cursor.flags.IsSet(cursInit) {
 			if nrec = t.cursor.rcursor - 1; nrec == 0 {
 				return nil, nil, db.ErrNotFound
 			}
 			break
 		}
-		if t.flags&(rEOF|rInMem) == 0 {
+		if t.flags.IsClr(rEOF | rInMem) {
 			if err := t.irec(math.MaxUint32); err != nil && err != db.ErrNotFound {
 				return nil, nil, err
 			}
@@ -528,7 +528,7 @@ func (r *DB) Seq(key []byte, flag db.Flag) (rkey, data []byte, err error) {
 	}
 
 	if t.nrecs == 0 || nrec > t.nrecs {
-		if t.flags&(rEOF|rInMem) == 0 {
+		if t.flags.IsClr(rEOF | rInMem) {
 			if err := t.irec(nrec); err != nil {
 				return nil, nil, err
 			}
@@ -542,7 +542,7 @@ func (r *DB) Seq(key []byte, flag db.Flag) (rkey, data []byte, err error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	t.cursor.flags |= cursInit
+	t.cursor.flags.Set(cursInit)
 	t.cursor.rcursor = nrec
 
 	data, err = t.record(*e)
@@ -580,11 +580,11 @@ func (r *DB) sync(flag db.Flag) error {
 // the flat file if it was modified.
 func (r *DB) syncFile() error {
 	t := r.t
-	if t.flags&(bRdOnly|rRdOnly|rInMem) != 0 || t.flags&rModified == 0 {
+	if t.flags.IsSet(bRdOnly|rRdOnly|rInMem) || t.flags.IsClr(rModified) {
 		return nil
 	}
 	// Read any remaining records into the tree.
-	if t.flags&rEOF == 0 {
+	if t.flags.IsClr(rEOF) {
 		if err := t.irec(math.MaxUint32); err != nil && err != db.ErrNotFound {
 			return err
 		}
@@ -600,7 +600,7 @@ func (r *DB) syncFile() error {
 		if err != nil {
 			return err
 		}
-		if t.flags&rFixLen == 0 {
+		if t.flags.IsClr(rFixLen) {
 			data = append(data, t.bval)
 		}
 		if err := t.mp.trim(); err != nil {
@@ -618,7 +618,7 @@ func (r *DB) syncFile() error {
 	if err := t.rfile.Truncate(off); err != nil {
 		return err
 	}
-	t.flags &^= rModified
+	t.flags.Clr(rModified)
 	return nil
 }
 
@@ -627,7 +627,7 @@ func (t *tree) irec(top uint32) error {
 	for t.nrecs < top {
 		var data []byte
 		var err error
-		if t.flags&rFixLen != 0 {
+		if t.flags.IsSet(rFixLen) {
 			data = make([]byte, t.reclen)
 			var n int
 			if n, err = io.ReadFull(t.rsrc, data); n == 0 {
@@ -660,7 +660,7 @@ func (t *tree) irec(top uint32) error {
 		}
 	}
 	if t.nrecs < top {
-		t.flags |= rEOF
+		t.flags.Set(rEOF)
 		t.rsrc = nil
 		return db.ErrNotFound
 	}

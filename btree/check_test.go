@@ -177,7 +177,7 @@ func TestSeqInterleaved(t *testing.T) {
 					t.Fatal(seed, op, err)
 				}
 			}
-			if c := d.cursor; c.flags&cursInit != 0 && c.flags&cursAcquire == 0 {
+			if c := d.cursor; c.flags.IsSet(cursInit) && c.flags.IsClr(cursAcquire) {
 				h, _ := d.get(c.pg.pgno)
 				if !h.isType(pBLeaf) || c.pg.index < 0 || c.pg.index >= h.nextIndex() {
 					t.Fatalf("seed %d op %d (kind %d): cursor %+v flags %x on page type %x n=%d", seed, op, lastKind, c.pg, c.flags, h.flags(), h.nextIndex())

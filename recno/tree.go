@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/dim13/db"
+	"github.com/dim13/db/flags"
 )
 
 const (
@@ -60,7 +61,7 @@ type epg struct {
 // cursor is the sequential scan position used by Seq.
 type cursor struct {
 	rcursor uint32 // recno cursor (1-based)
-	flags   uint8
+	flags   flags.Set[uint8]
 }
 
 // tree is the in-memory btree holding records.
@@ -75,7 +76,7 @@ type tree struct {
 	free     uint32 // next free page
 	psize    int
 	ovflsize int // cut-off for key/data overflow
-	flags    uint32
+	flags    flags.Set[uint32]
 
 	// recno
 	rfile  *os.File      // record file
@@ -105,7 +106,7 @@ func openTree(file *os.File, psize, cache int, o binary.ByteOrder) (*tree, error
 
 	var size int64
 	if file == nil {
-		t.flags |= bInMem
+		t.flags.Set(bInMem)
 	} else {
 		fi, err := file.Stat()
 		if err != nil {
@@ -133,14 +134,14 @@ func openTree(file *os.File, psize, cache int, o binary.ByteOrder) (*tree, error
 		if mv.u32(4) != version || !validPSize(psize) || flags&^saveMeta != 0 {
 			return nil, fmt.Errorf("%w: meta", db.ErrFormat)
 		}
-		t.flags |= flags
+		t.flags.Set(flags)
 		t.free = mv.u32(12)
 		t.nrecs = mv.u32(16)
 	} else {
 		if psize == 0 {
 			psize = defPSize
 		}
-		t.flags |= bNoDups
+		t.flags.Set(bNoDups)
 		t.free = pInvalid
 	}
 	t.psize = psize
@@ -174,7 +175,7 @@ func (t *tree) nroot() error {
 		return fmt.Errorf("%w: root page %d", db.ErrFormat, npg)
 	}
 	t.page(b).init(npg, pInvalid, pInvalid, pBLeaf, t.psize)
-	t.flags |= bModified
+	t.flags.Set(bModified)
 	return nil
 }
 
@@ -225,7 +226,7 @@ func (t *tree) done(err *error) {
 // sync writes the meta page and dirty pages to disk if the tree was modified;
 // it is a no-op for in-memory and read-only trees.
 func (t *tree) sync() error {
-	if t.flags&(bInMem|bRdOnly) != 0 || t.flags&bModified == 0 {
+	if t.flags.IsSet(bInMem|bRdOnly) || t.flags.IsClr(bModified) {
 		return nil
 	}
 	// Unlike 1.85, always write meta-data, so the free list and
@@ -236,7 +237,7 @@ func (t *tree) sync() error {
 	if err := t.mp.sync(); err != nil {
 		return err
 	}
-	t.flags &^= bModified
+	t.flags.Clr(bModified)
 	return nil
 }
 
@@ -252,7 +253,7 @@ func (t *tree) writeMeta() error {
 	m.setU32(8, uint32(t.psize))
 	m.setU32(12, t.free)
 	m.setU32(16, t.nrecs)
-	m.setU32(20, t.flags&saveMeta)
+	m.setU32(20, t.flags.Value(saveMeta))
 	t.mp.dirty(pMeta)
 	return nil
 }
