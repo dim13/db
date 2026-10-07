@@ -155,7 +155,7 @@ func New(file *os.File, info *Info) (*DB, error) {
 	}
 	// Set once the bucket size is known, in-memory tables can't evict.
 	defer func() {
-		if file != nil {
+		if file != nil && h.hdr.BSize > 0 { // not on a header error
 			h.cache.Limit = max(cache/int(h.hdr.BSize), minBuffers)
 		}
 	}()

@@ -12,7 +12,7 @@ import (
 	"github.com/dim13/db/internal/dbtest"
 )
 
-func open(t *testing.T, name string, info *Info) db.DB {
+func open(t testing.TB, name string, info *Info) db.DB {
 	t.Helper()
 	f, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {

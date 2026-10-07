@@ -130,10 +130,58 @@ func Model(d db.DB, n int, reopen func(db.DB) (db.DB, error)) (db.DB, error) {
 			}
 		}
 	}
+	return d, check(d, m)
+}
+
+// Ops applies ops to d and a map, three bytes per operation, and returns
+// the first disagreement.  The first byte selects put, delete or get, the
+// second the key, and the third the data length, 255 for overflow-sized
+// data.  Reopen, if not nil, is called before the final check; Ops
+// returns the database last in use.
+func Ops(d db.DB, ops []byte, reopen func(db.DB) (db.DB, error)) (db.DB, error) {
+	m := make(map[string][]byte)
+	for i := 0; i+3 <= len(ops); i += 3 {
+		key, _ := Gen(int(ops[i+1]))
+		n := int(ops[i+2])
+		if n == 255 {
+			n = 5000
+		}
+		data := bytes.Repeat([]byte{ops[i+2]}, n)
+		switch ops[i] % 3 {
+		case 0:
+			if _, err := d.Put(key, data, db.RNone); err != nil {
+				return d, fmt.Errorf("op %d put: %w", i/3, err)
+			}
+			m[string(key)] = data
+		case 1:
+			err := d.Del(key, db.RNone)
+			if _, ok := m[string(key)]; ok != (err == nil) {
+				return d, fmt.Errorf("op %d del: %v, in model %v", i/3, err, ok)
+			}
+			delete(m, string(key))
+		case 2:
+			got, err := d.Get(key, db.RNone)
+			want, ok := m[string(key)]
+			if ok != (err == nil) || !bytes.Equal(got, want) {
+				return d, fmt.Errorf("op %d get: %v, in model %v", i/3, err, ok)
+			}
+		}
+	}
+	if reopen != nil {
+		var err error
+		if d, err = reopen(d); err != nil {
+			return d, fmt.Errorf("reopen: %w", err)
+		}
+	}
+	return d, check(d, m)
+}
+
+// check compares all records of d with m.
+func check(d db.DB, m map[string][]byte) error {
 	for k, want := range m {
 		got, err := d.Get([]byte(k), db.RNone)
 		if err != nil || !bytes.Equal(got, want) {
-			return d, fmt.Errorf("final get %.20q: %v", k, err)
+			return fmt.Errorf("final get %.20q: %v", k, err)
 		}
 	}
 	var seen int
@@ -143,17 +191,17 @@ func Model(d db.DB, n int, reopen func(db.DB) (db.DB, error)) (db.DB, error) {
 			break
 		}
 		if err != nil {
-			return d, err
+			return err
 		}
 		if want, ok := m[string(k)]; !ok || !bytes.Equal(v, want) {
-			return d, fmt.Errorf("seq %.20q: unexpected", k)
+			return fmt.Errorf("seq %.20q: unexpected", k)
 		}
 		seen++
 	}
 	if seen != len(m) {
-		return d, fmt.Errorf("seq: got %d records, want %d", seen, len(m))
+		return fmt.Errorf("seq: got %d records, want %d", seen, len(m))
 	}
-	return d, nil
+	return nil
 }
 
 // Expect returns the dump of what dbtool mk writes: n pairs, every 5th
