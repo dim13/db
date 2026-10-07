@@ -408,6 +408,44 @@ func (h *DB) getPage(p []byte, addr int, bucket, disk, bitmap bool) error {
 	if !bitmap && h.page(p).at(0) == 0 {
 		h.pageInit(p)
 	}
+	if bitmap {
+		return nil
+	}
+	return h.checkPage(p, addr)
+}
+
+// checkPage returns an error for a page read from the file whose entry
+// count or offsets are corrupt, so the pair accessors can slice it
+// unchecked.  Regular pairs have descending offsets and may end in an
+// overflow link.  A big pair is alone on its page, optionally followed by
+// the link to its next page and the offset of data starting here.
+func (h *DB) checkPage(b []byte, addr int) error {
+	p := h.page(b)
+	n := p.at(0)
+	meta := pageMeta(n)
+	if n%2 != 0 || meta > len(b) || p.offset() < meta || p.offset() > len(b) ||
+		p.freespace() > p.offset()-meta {
+		return fmt.Errorf("%w: page %d header", db.ErrFormat, addr)
+	}
+	if n >= 2 && p.at(2) < realKey && p.at(2) != ovflPage {
+		k := p.at(1)
+		if n > 4 || k < meta || k > len(b) ||
+			n == 4 && p.at(4) != ovflPage && (p.at(4) < meta || p.at(4) > k) {
+			return fmt.Errorf("%w: page %d big pair", db.ErrFormat, addr)
+		}
+		return nil
+	}
+	end := len(b)
+	for i := 1; i < n; i += 2 {
+		k, v := p.at(i), p.at(i+1)
+		switch {
+		case v == ovflPage && i+1 == n:
+		case v < realKey || k > end || v < meta || v > k:
+			return fmt.Errorf("%w: page %d pair %d", db.ErrFormat, addr, i)
+		default:
+			end = v
+		}
+	}
 	return nil
 }
 

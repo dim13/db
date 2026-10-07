@@ -61,7 +61,8 @@ type mpool struct {
 	file    *os.File
 	psize   int
 	npages  atomic.Uint32
-	noWrite bool // read-only, dirty pages stay cached
+	noWrite bool                              // read-only, dirty pages stay cached
+	check   func(pgno uint32, b []byte) error // validates pages read from the file
 	cache   lru.Cache[uint32, *cpage]
 }
 
@@ -72,15 +73,17 @@ type cpage struct {
 	mod  bool
 }
 
-// newMpool returns a page cache over file of size bytes; limit is ignored
-// (no eviction) for an in-memory pool with a nil file.
-func newMpool(file *os.File, psize int, size int64, limit int) *mpool {
+// newMpool returns a page cache over file of size bytes, checking each
+// page read with check; limit is ignored (no eviction) for an in-memory
+// pool with a nil file.
+func newMpool(file *os.File, psize int, size int64, limit int, check func(uint32, []byte) error) *mpool {
 	if file == nil {
 		limit = 0 // nowhere to evict to
 	}
 	m := &mpool{
 		file:  file,
 		psize: psize,
+		check: check,
 	}
 	m.npages.Store(uint32(size / int64(psize)))
 	m.cache.Limit = limit
@@ -100,6 +103,9 @@ func (m *mpool) get(pgno uint32) ([]byte, error) {
 				err = io.ErrUnexpectedEOF
 			}
 			return nil, fmt.Errorf("page %d: %w", pgno, err)
+		}
+		if err := m.check(pgno, b); err != nil {
+			return nil, err
 		}
 		return &cpage{
 			pgno: pgno,

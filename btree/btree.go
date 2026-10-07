@@ -212,7 +212,7 @@ func New(file *os.File, info *Info) (*DB, error) {
 	if b.CacheSize == 0 {
 		b.CacheSize = defCacheSize
 	}
-	t.mp = newMpool(file, t.psize, size, max(b.CacheSize/t.psize, minCache))
+	t.mp = newMpool(file, t.psize, size, max(b.CacheSize/t.psize, minCache), t.checkPage)
 	t.mp.noWrite = t.flags.IsSet(bRdOnly)
 	if err := t.nroot(); err != nil {
 		return nil, err
@@ -246,6 +246,19 @@ func (t *DB) page(b []byte) page {
 func (t *DB) get(pgno uint32) (page, error) {
 	b, err := t.mp.get(pgno)
 	return t.page(b), err
+}
+
+// leafPage returns leaf pg, linked from another leaf, which must hold
+// records, as only the root leaf is ever empty.
+func (t *DB) leafPage(pg uint32) (page, error) {
+	h, err := t.get(pg)
+	if err != nil {
+		return h, err
+	}
+	if !h.isType(pBLeaf) || h.nextIndex() == 0 {
+		return h, fmt.Errorf("%w: page %d", db.ErrPageType, pg)
+	}
+	return h, nil
 }
 
 // dirty marks page h as modified so it is written on sync or eviction.
@@ -369,14 +382,23 @@ func (t *DB) bnew() (uint32, page, error) {
 
 // ovflGet reads the item referenced by ref from its overflow chain.
 func (t *DB) ovflGet(ref []byte) ([]byte, error) {
+	if len(ref) < novflSize {
+		return nil, fmt.Errorf("%w: overflow reference", db.ErrFormat)
+	}
 	pg := t.o.Uint32(ref)
 	sz := int(t.o.Uint32(ref[4:]))
-	buf := make([]byte, 0, sz)
 	plen := t.psize - dataOff
+	if sz > int(t.mp.npages.Load())*plen {
+		return nil, fmt.Errorf("%w: overflow size %d", db.ErrFormat, sz)
+	}
+	buf := make([]byte, 0, sz)
 	for sz > 0 {
 		h, err := t.get(pg)
 		if err != nil {
 			return nil, err
+		}
+		if !h.isType(pOverflow) {
+			return nil, fmt.Errorf("%w: page %d", db.ErrPageType, pg)
 		}
 		nb := min(sz, plen)
 		buf = append(buf, h.b[dataOff:dataOff+nb]...)
@@ -421,6 +443,9 @@ func (t *DB) ovflPut(data []byte) ([]byte, error) {
 
 // ovflDelete frees the overflow chain referenced by ref.
 func (t *DB) ovflDelete(ref []byte) error {
+	if len(ref) < novflSize {
+		return fmt.Errorf("%w: overflow reference", db.ErrFormat)
+	}
 	pg := t.o.Uint32(ref)
 	sz := int(t.o.Uint32(ref[4:]))
 	h, err := t.get(pg)
@@ -597,7 +622,7 @@ func (t *DB) sibling(pg uint32, index int, key []byte) (epg, bool, error) {
 		return epg{}, false, nil
 	}
 	p, err := t.get(pg)
-	if err != nil || p.nextIndex() == 0 {
+	if err != nil || p.nextIndex() == 0 || !p.isType(pBLeaf) {
 		return epg{}, false, err
 	}
 	if index < 0 {
@@ -813,4 +838,41 @@ func (t *DB) fast(skey, key, data []byte) (*epg, bool) {
 		t.last.index = 0
 	}
 	return &t.cur, cmp == 0
+}
+
+// checkPage returns an error for a page read from the file whose type or
+// item bounds are corrupt, so the item accessors can slice it unchecked.
+func (t *DB) checkPage(pgno uint32, b []byte) error {
+	if pgno == pMeta {
+		return nil // checked by New
+	}
+	p := t.page(b)
+	if p.pgno() != pgno {
+		return fmt.Errorf("%w: page %d numbered %d", db.ErrFormat, pgno, p.pgno())
+	}
+	switch p.flags() & pType {
+	case pOverflow:
+		return nil
+	case pBInternal, pBLeaf:
+	default:
+		return fmt.Errorf("%w: page %d", db.ErrPageType, pgno)
+	}
+	lower, upper := p.lower(), p.upper()
+	if lower < dataOff || lower%2 != 0 || lower > upper || upper > len(b) {
+		return fmt.Errorf("%w: page %d bounds", db.ErrFormat, pgno)
+	}
+	for i := range p.nextIndex() {
+		off := p.linp(i)
+		if off < upper || off+9 > len(b) {
+			return fmt.Errorf("%w: page %d item %d", db.ErrFormat, pgno, i)
+		}
+		end := off + 9 + int(p.u32(off))
+		if p.isType(pBLeaf) {
+			end += int(p.u32(off + 4))
+		}
+		if end > len(b) {
+			return fmt.Errorf("%w: page %d item %d", db.ErrFormat, pgno, i)
+		}
+	}
+	return nil
 }

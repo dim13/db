@@ -98,7 +98,7 @@ func (t *DB) seqadv(flag db.Flag) (epg, error) {
 			if pg == pInvalid {
 				return epg{}, db.ErrNotFound
 			}
-			if h, err = t.get(pg); err != nil {
+			if h, err = t.leafPage(pg); err != nil {
 				return epg{}, err
 			}
 			index = 0
@@ -113,7 +113,7 @@ func (t *DB) seqadv(flag db.Flag) (epg, error) {
 			if pg == pInvalid {
 				return epg{}, db.ErrNotFound
 			}
-			if h, err = t.get(pg); err != nil {
+			if h, err = t.leafPage(pg); err != nil {
 				return epg{}, err
 			}
 			index = h.nextIndex() - 1
@@ -144,7 +144,7 @@ func (t *DB) first(key []byte) (epg, error) {
 				if e.page.prevpg() == pInvalid {
 					break
 				}
-				h, err := t.get(e.page.prevpg())
+				h, err := t.leafPage(e.page.prevpg())
 				if err != nil {
 					return epg{}, err
 				}
@@ -168,7 +168,7 @@ func (t *DB) first(key []byte) (epg, error) {
 		if pg == pInvalid {
 			return epg{}, db.ErrNotFound
 		}
-		h, err := t.get(pg)
+		h, err := t.leafPage(pg)
 		if err != nil {
 			return epg{}, err
 		}

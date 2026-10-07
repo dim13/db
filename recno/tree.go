@@ -155,7 +155,7 @@ func openTree(file *os.File, psize, cache int, o binary.ByteOrder) (*tree, error
 	if cache == 0 {
 		cache = defCacheSize
 	}
-	t.mp = newMpool(file, t.psize, size, max(cache/t.psize, minCache))
+	t.mp = newMpool(file, t.psize, size, max(cache/t.psize, minCache), t.checkPage)
 	if err := t.nroot(); err != nil {
 		return nil, err
 	}
@@ -284,14 +284,23 @@ func (t *tree) bnew() (uint32, page, error) {
 
 // ovflGet reads the data an overflow reference points to.
 func (t *tree) ovflGet(ref []byte) ([]byte, error) {
+	if len(ref) < novflSize {
+		return nil, fmt.Errorf("%w: overflow reference", db.ErrFormat)
+	}
 	pg := t.o.Uint32(ref)
 	sz := int(t.o.Uint32(ref[4:]))
-	buf := make([]byte, 0, sz)
 	plen := t.psize - dataOff
+	if sz > int(t.mp.npages.Load())*plen {
+		return nil, fmt.Errorf("%w: overflow size %d", db.ErrFormat, sz)
+	}
+	buf := make([]byte, 0, sz)
 	for sz > 0 {
 		h, err := t.get(pg)
 		if err != nil {
 			return nil, err
+		}
+		if !h.isType(pOverflow) {
+			return nil, fmt.Errorf("%w: page %d", db.ErrPageType, pg)
 		}
 		nb := min(sz, plen)
 		buf = append(buf, h.b[dataOff:dataOff+nb]...)
@@ -336,6 +345,9 @@ func (t *tree) ovflPut(data []byte) ([]byte, error) {
 
 // ovflDelete frees the overflow chain behind ref.
 func (t *tree) ovflDelete(ref []byte) error {
+	if len(ref) < novflSize {
+		return fmt.Errorf("%w: overflow reference", db.ErrFormat)
+	}
 	pg := t.o.Uint32(ref)
 	sz := int(t.o.Uint32(ref[4:]))
 	h, err := t.get(pg)
@@ -354,6 +366,47 @@ func (t *tree) ovflDelete(ref []byte) error {
 		}
 		if h, err = t.get(pg); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// checkPage returns an error for a page read from the file whose type or
+// item bounds are corrupt, so the item accessors can slice it unchecked.
+func (t *tree) checkPage(pgno uint32, b []byte) error {
+	if pgno == pMeta {
+		return nil // checked by openTree
+	}
+	p := t.page(b)
+	if p.pgno() != pgno {
+		return fmt.Errorf("%w: page %d numbered %d", db.ErrFormat, pgno, p.pgno())
+	}
+	var head int // item header size
+	switch p.flags() & pType {
+	case pOverflow:
+		return nil
+	case pBLeaf: // a fresh root, retyped on open
+		if p.lower() != dataOff {
+			return fmt.Errorf("%w: page %d", db.ErrPageType, pgno)
+		}
+	case pRInternal:
+		head = 8
+	case pRLeaf:
+		head = 5
+	default:
+		return fmt.Errorf("%w: page %d", db.ErrPageType, pgno)
+	}
+	lower, upper := p.lower(), p.upper()
+	if lower < dataOff || lower%2 != 0 || lower > upper || upper > len(b) {
+		return fmt.Errorf("%w: page %d bounds", db.ErrFormat, pgno)
+	}
+	for i := range p.nextIndex() {
+		off := p.linp(i)
+		if off < upper || off+head > len(b) {
+			return fmt.Errorf("%w: page %d item %d", db.ErrFormat, pgno, i)
+		}
+		if p.isType(pRLeaf) && off+head+int(p.u32(off)) > len(b) {
+			return fmt.Errorf("%w: page %d item %d", db.ErrFormat, pgno, i)
 		}
 	}
 	return nil

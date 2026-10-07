@@ -1,10 +1,18 @@
 package hash
 
-import "bytes"
+import (
+	"bytes"
+	"fmt"
+
+	"github.com/dim13/db"
+)
 
 // next returns the overflow page referenced by the last entry pair of bufp.
 func (h *DB) next(bufp *buf) (*buf, error) {
 	bp := h.page(bufp.page)
+	if bp.at(0) < 2 {
+		return nil, fmt.Errorf("%w: page %d has no overflow link", db.ErrFormat, bufp.addr)
+	}
 	return h.getBuf(bp.at(bp.at(0)-1), bufp, false)
 }
 
