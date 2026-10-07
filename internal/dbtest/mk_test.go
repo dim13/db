@@ -8,8 +8,8 @@ import (
 
 	"github.com/dim13/db"
 	"github.com/dim13/db/btree"
-	"github.com/dim13/db/dbtest"
 	"github.com/dim13/db/hash"
+	"github.com/dim13/db/internal/dbtest"
 	"github.com/dim13/db/recno"
 )
 

@@ -8,7 +8,7 @@
  *	dbtool check btree|hash file n		get every pair written by mk
  *
  * LORDER and BSIZE environment variables set lorder and psize/bsize on mk.
- * MKDIR=dir go test -run TestMk ./dbtest writes the same files
+ * MKDIR=dir go test -run TestMk ./internal/dbtest writes the same files
  * with Go for dbtool to check.
  */
 #include <db.h>

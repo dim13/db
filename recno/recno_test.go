@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/dim13/db"
-	"github.com/dim13/db/dbtest"
+	"github.com/dim13/db/internal/dbtest"
 )
 
 func key(n int) []byte {
@@ -173,7 +173,7 @@ func TestCursor(t *testing.T) {
 }
 
 // TestLibc reads a database written by libc dbopen(3), see
-// dbtest/testdata/dbtool.c, and compares with libc's dump of it.
+// internal/dbtest/testdata/dbtool.c, and compares with libc's dump of it.
 func TestLibc(t *testing.T) {
 	f, err := os.Open("testdata/recno.db")
 	if err != nil {

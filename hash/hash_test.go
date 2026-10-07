@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/dim13/db"
-	"github.com/dim13/db/dbtest"
+	"github.com/dim13/db/internal/dbtest"
 )
 
 func open(t *testing.T, name string, info *Info) db.DB {
@@ -98,7 +98,7 @@ func TestInMemory(t *testing.T) {
 }
 
 // TestLibc reads a database written by libc dbopen(3), see
-// dbtest/testdata/dbtool.c.  libc's own dump
+// internal/dbtest/testdata/dbtool.c.  libc's own dump
 // misses some 3000 byte keys, so compare with what was written instead.
 func TestLibc(t *testing.T) {
 	f, err := os.Open("testdata/hash.db")

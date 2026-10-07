@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/dim13/db"
-	"github.com/dim13/db/dbtest"
+	"github.com/dim13/db/internal/dbtest"
 )
 
 func TestStress(t *testing.T) {

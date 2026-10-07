@@ -9,7 +9,7 @@ import (
 	"sync"
 
 	"github.com/dim13/db"
-	"github.com/dim13/db/flags"
+	"github.com/dim13/db/internal/flags"
 )
 
 const (
