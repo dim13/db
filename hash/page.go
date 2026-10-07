@@ -588,8 +588,9 @@ func (h *DB) freeOvflpage(obufp *buf) error {
 		return err
 	}
 	h.clrbit(freep, freeBit)
-	if v, ok := h.ovfls.Load(addr); ok && v == obufp {
-		h.drop(obufp)
+	k := bufKey(addr, false)
+	if b, ok := h.cache.Peek(k); ok && b == obufp {
+		h.cache.Delete(k)
 	}
 	return nil
 }

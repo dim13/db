@@ -124,7 +124,7 @@ func TestCacheLimit(t *testing.T) {
 		if _, err := d.Put(k, v, db.RNone); err != nil {
 			t.Fatal(err)
 		}
-		if got, want := d.mp.lru.Len(), minCache; got > want {
+		if got, want := d.mp.cache.Len(), minCache; got > want {
 			t.Fatalf("put %d: %d pages cached, want at most %d", i, got, want)
 		}
 	}

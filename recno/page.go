@@ -1,15 +1,14 @@
 package recno
 
 import (
-	"container/list"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
-	"sync"
 	"sync/atomic"
 
 	"github.com/dim13/db"
+	"github.com/dim13/db/internal/lru"
 )
 
 const (
@@ -51,106 +50,84 @@ func nrleafdbt(dsize int) int {
 	return lalign(4 + 1 + dsize)
 }
 
-// mpool is a page cache evicting least recently used pages, approximated
-// by second chance.  Hits take no lock, so concurrent readers scale.
-// Callers hold page slices during an operation, so pages are only evicted
-// by trim between operations.
+// mpool is a page cache over a file.  Callers hold page slices during an
+// operation, so pages are only evicted by trim between operations.
 type mpool struct {
-	mu      sync.Mutex // guards lru, npages and stores to pages
 	file    *os.File
 	psize   int
-	npages  uint32
-	limit   int       // pages kept by trim, 0 for no limit
-	noWrite bool      // read-only, dirty pages stay cached
-	pages   sync.Map  // pgno to *list.Element
-	lru     list.List // of *cpage, most recently added first
-	cached  atomic.Int64
+	npages  atomic.Uint32
+	noWrite bool // read-only, dirty pages stay cached
+	cache   lru.Cache[uint32, *cpage]
 }
 
-// cpage is a cached page and its dirty and recently-used state.
+// cpage is a cached page and its dirty state.
 type cpage struct {
 	pgno uint32
 	b    []byte
 	mod  bool
-	used atomic.Bool // hit since last trim, gets a second chance
 }
 
-// newMpool returns a page cache over file of size bytes; limit is ignored for in-memory pools.
+// newMpool returns a page cache over file of size bytes; limit is ignored
+// (no eviction) for an in-memory pool with a nil file.
 func newMpool(file *os.File, psize int, size int64, limit int) *mpool {
 	if file == nil {
 		limit = 0 // nowhere to evict to
 	}
-	return &mpool{
-		file:   file,
-		psize:  psize,
-		npages: uint32(size / int64(psize)),
-		limit:  limit,
+	m := &mpool{
+		file:  file,
+		psize: psize,
 	}
+	m.npages.Store(uint32(size / int64(psize)))
+	m.cache.Limit = limit
+	return m
 }
 
-// lookup returns the cached page pgno, if any, without locking.
-func (m *mpool) lookup(pgno uint32) (*cpage, bool) {
-	v, ok := m.pages.Load(pgno)
-	if !ok {
-		return nil, false
-	}
-	return v.(*list.Element).Value.(*cpage), true
-}
-
-// add caches p as most recently used; the caller must hold m.mu.
-func (m *mpool) add(p *cpage) {
-	m.pages.Store(p.pgno, m.lru.PushFront(p))
-	m.cached.Add(1)
-}
-
-// get returns page pgno, reading it from file on a miss, or db.ErrNoPage
-// if it lies beyond the end of the pool.
+// get returns page pgno, reading it from the file on a miss, or
+// db.ErrNoPage if it lies beyond the end.
 func (m *mpool) get(pgno uint32) ([]byte, error) {
-	if p, ok := m.lookup(pgno); ok {
-		if !p.used.Load() { // spare the cache line when set
-			p.used.Store(true)
+	p, err := m.cache.Get(pgno, func() (*cpage, error) {
+		if pgno >= m.npages.Load() {
+			return nil, db.ErrNoPage
 		}
-		return p.b, nil
-	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if pgno >= m.npages {
-		return nil, db.ErrNoPage
-	}
-	if p, ok := m.lookup(pgno); ok { // read by another reader meanwhile
-		return p.b, nil
-	}
-	p := make([]byte, m.psize)
-	if _, err := m.file.ReadAt(p, int64(pgno)*int64(m.psize)); err != nil {
-		if err == io.EOF {
-			err = io.ErrUnexpectedEOF
+		b := make([]byte, m.psize)
+		if _, err := m.file.ReadAt(b, int64(pgno)*int64(m.psize)); err != nil {
+			if err == io.EOF {
+				err = io.ErrUnexpectedEOF
+			}
+			return nil, fmt.Errorf("page %d: %w", pgno, err)
 		}
-		return nil, fmt.Errorf("page %d: %w", pgno, err)
+		return &cpage{
+			pgno: pgno,
+			b:    b,
+		}, nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	m.add(&cpage{pgno: pgno, b: p})
-	return p, nil
+	return p.b, nil
 }
 
-// new appends a zeroed, dirty page to the pool and returns its number and bytes.
+// new allocates a zeroed, dirty page at the end of the file and returns
+// its number and bytes; only writers call it.
 func (m *mpool) new() (uint32, []byte) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	pgno := m.npages
-	m.npages++
-	p := make([]byte, m.psize)
-	m.add(&cpage{pgno: pgno, b: p, mod: true})
-	return pgno, p
+	pgno := m.npages.Add(1) - 1
+	b := make([]byte, m.psize)
+	m.cache.Add(pgno, &cpage{
+		pgno: pgno,
+		b:    b,
+		mod:  true,
+	})
+	return pgno, b
 }
 
 // dirty marks a page cached since get or new of the same operation, only
 // writers call it.
 func (m *mpool) dirty(pgno uint32) {
-	p, _ := m.lookup(pgno)
+	p, _ := m.cache.Peek(pgno)
 	p.mod = true
 }
 
-// write writes p to file and marks it clean; the caller must hold m.mu.
+// write writes page p to the file and clears its modified flag.
 func (m *mpool) write(p *cpage) error {
 	if _, err := m.file.WriteAt(p.b, int64(p.pgno)*int64(m.psize)); err != nil {
 		return err
@@ -159,50 +136,35 @@ func (m *mpool) write(p *cpage) error {
 	return nil
 }
 
-// sync writes all dirty pages and syncs the file; it is a no-op without a file.
+// sync writes all dirty pages and fsyncs the file; it is a no-op without a file.
 func (m *mpool) sync() error {
 	if m.file == nil {
 		return nil
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for el := m.lru.Front(); el != nil; el = el.Next() {
-		if p := el.Value.(*cpage); p.mod {
-			if err := m.write(p); err != nil {
-				return err
-			}
+	err := m.cache.Range(func(p *cpage) error {
+		if p.mod {
+			return m.write(p)
 		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 	return m.file.Sync()
 }
 
-// trim evicts least recently used pages down to limit, writing dirty ones.
+// trim evicts least recently used pages down to the limit, writing dirty
+// ones; with noWrite dirty pages stay.
 func (m *mpool) trim() error {
-	if m.limit == 0 || m.cached.Load() <= int64(m.limit) {
-		return nil
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for m.lru.Len() > m.limit {
-		el := m.lru.Back()
-		p := el.Value.(*cpage)
-		if p.used.Swap(false) {
-			m.lru.MoveToFront(el)
-			continue
+	return m.cache.Trim(func(p *cpage) (bool, error) {
+		switch {
+		case !p.mod:
+			return true, nil
+		case m.noWrite:
+			return false, nil
 		}
-		if p.mod {
-			if m.noWrite {
-				return nil
-			}
-			if err := m.write(p); err != nil {
-				return err
-			}
-		}
-		m.lru.Remove(el)
-		m.pages.Delete(p.pgno)
-		m.cached.Add(-1)
-	}
-	return nil
+		return true, m.write(p)
+	})
 }
 
 // page is a view on a tree page.

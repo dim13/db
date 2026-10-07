@@ -145,7 +145,7 @@ func TestCacheLimit(t *testing.T) {
 	check := func(when string) {
 		t.Helper()
 		// The scan cursor's page may stay on top of the limit.
-		if got, limit := h.lru.Len(), minBuffers+1; got > limit {
+		if got, limit := h.cache.Len(), minBuffers+1; got > limit {
 			t.Fatalf("%s: %d buffers cached, want at most %d", when, got, limit)
 		}
 	}

@@ -39,7 +39,7 @@ func TestCacheLimit(t *testing.T) {
 	}
 	check := func(when string) {
 		t.Helper()
-		if got, limit := d.t.mp.lru.Len(), minCache; got > limit {
+		if got, limit := d.t.mp.cache.Len(), minCache; got > limit {
 			t.Fatalf("%s: %d pages cached, want at most %d", when, got, limit)
 		}
 	}

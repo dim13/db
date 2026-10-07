@@ -4,16 +4,15 @@ package hash
 
 import (
 	"bytes"
-	"container/list"
 	"encoding/binary"
 	"fmt"
 	"hash"
 	"io"
 	"os"
 	"sync"
-	"sync/atomic"
 
 	"github.com/dim13/db"
+	"github.com/dim13/db/internal/lru"
 )
 
 const (
@@ -91,14 +90,20 @@ type Info struct {
 	ReadOnly   bool               // refuse changes, never write
 }
 
+// bufKey returns the cache key of a bucket or overflow page address.
+func bufKey(addr int, bucket bool) int {
+	if bucket {
+		return addr<<1 | 1
+	}
+	return addr << 1
+}
+
 // buf is a cached bucket or overflow page.
 type buf struct {
 	addr   int    // address of this page
 	page   []byte // actual page data
 	mod    bool   // modified
 	bucket bool   // bucket page, overflow page otherwise
-	elem   *list.Element
-	used   atomic.Bool // hit since last trim, gets a second chance
 }
 
 // DB is an open hash database, safe for concurrent use: Get calls run in
@@ -116,16 +121,8 @@ type DB struct {
 	modified bool
 	readOnly bool
 
-	// Buffer cache evicting least recently used buffers, approximated by
-	// second chance, trimmed to limit between operations, as callers hold
-	// buffers during one.  Hits take no lock, so concurrent readers scale.
-	mu      sync.RWMutex // Get reads, everything else writes
-	cmu     sync.Mutex   // guards lru and stores to buckets and ovfls
-	buckets sync.Map     // bucket address to *buf
-	ovfls   sync.Map     // overflow address to *buf
-	cached  atomic.Int64
-	lru     list.List // of *buf, most recently used first
-	limit   int       // buffers kept by trim, 0 for no limit
+	mu    sync.RWMutex         // Get reads, everything else writes
+	cache lru.Cache[int, *buf] // trimmed between operations, callers hold buffers during one
 
 	// sequential scan cursor
 	cpage   *buf
@@ -159,7 +156,7 @@ func New(file *os.File, info *Info) (*DB, error) {
 	// Set once the bucket size is known, in-memory tables can't evict.
 	defer func() {
 		if file != nil {
-			h.limit = max(cache/int(h.hdr.BSize), minBuffers)
+			h.cache.Limit = max(cache/int(h.hdr.BSize), minBuffers)
 		}
 	}()
 	var size int64
@@ -323,13 +320,18 @@ func (h *DB) sync() error {
 	if h.file == nil || h.readOnly || !h.modified {
 		return nil
 	}
-	for el := h.lru.Front(); el != nil; el = el.Next() {
-		if b := el.Value.(*buf); b.mod {
-			if err := h.putPage(b.page, b.addr, b.bucket); err != nil {
-				return err
-			}
-			b.mod = false
+	err := h.cache.Range(func(b *buf) error {
+		if !b.mod {
+			return nil
 		}
+		if err := h.putPage(b.page, b.addr, b.bucket); err != nil {
+			return err
+		}
+		b.mod = false
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 	if err := h.flushMeta(); err != nil {
 		return err
@@ -420,81 +422,47 @@ func (h *DB) putPage(p []byte, addr int, bucket bool) error {
 // getBuf returns buffer for addr; if prev is nil, addr is a bucket index,
 // overflow page address otherwise.  New overflow pages are initialized.
 func (h *DB) getBuf(addr int, prev *buf, newpage bool) (*buf, error) {
-	m := &h.buckets
-	if prev != nil {
-		m = &h.ovfls
+	k := bufKey(addr, prev == nil)
+	load := func() (*buf, error) {
+		b := &buf{
+			addr:   addr,
+			page:   make([]byte, h.hdr.BSize),
+			bucket: prev == nil,
+		}
+		if err := h.getPage(b.page, addr, b.bucket, !newpage, false); err != nil {
+			return nil, err
+		}
+		return b, nil
 	}
 	if !newpage {
-		if v, ok := m.Load(addr); ok {
-			b := v.(*buf)
-			if !b.used.Load() { // spare the cache line when set
-				b.used.Store(true)
-			}
-			return b, nil
-		}
+		return h.cache.Get(k, load)
 	}
-
-	h.cmu.Lock()
-	defer h.cmu.Unlock()
-	v, ok := m.Load(addr)
-	if ok && !newpage { // read by another reader meanwhile
-		return v.(*buf), nil
-	}
-	b := &buf{
-		addr:   addr,
-		page:   make([]byte, h.hdr.BSize),
-		bucket: prev == nil,
-	}
-	if err := h.getPage(b.page, addr, b.bucket, !newpage, false); err != nil {
+	b, err := load()
+	if err != nil {
 		return nil, err
 	}
-	if ok {
-		h.drop(v.(*buf))
-	}
-	b.elem = h.lru.PushFront(b)
-	m.Store(addr, b)
-	h.cached.Add(1)
+	h.cache.Add(k, b)
 	return b, nil
 }
 
-// drop removes b from the cache, h.cmu held or callers exclusive.
-func (h *DB) drop(b *buf) {
-	m := &h.ovfls
-	if b.bucket {
-		m = &h.buckets
-	}
-	m.CompareAndDelete(b.addr, b)
-	h.lru.Remove(b.elem)
-	h.cached.Add(-1)
-}
-
-// trim evicts least recently used buffers down to limit, writing modified
-// ones.  The scan cursor's page stays, Seq holds it across calls.
+// trim evicts least recently used buffers down to the limit, writing
+// modified ones.  The scan cursor's page stays, Seq holds it across calls.
 func (h *DB) trim() error {
-	if h.limit == 0 || h.cached.Load() <= int64(h.limit) {
-		return nil
-	}
-	h.cmu.Lock()
-	defer h.cmu.Unlock()
-	for h.lru.Len() > h.limit {
-		el := h.lru.Back()
-		b := el.Value.(*buf)
-		if b.used.Swap(false) || b == h.cpage {
-			h.lru.MoveToFront(el)
-			continue
+	return h.cache.Trim(func(b *buf) (bool, error) {
+		switch {
+		case b == h.cpage:
+			return false, nil
+		case !b.mod:
+			return true, nil
+		case h.readOnly:
+			return false, nil
 		}
-		if b.mod {
-			if h.readOnly {
-				return nil
-			}
-			if err := h.putPage(b.page, b.addr, b.bucket); err != nil {
-				return err
-			}
-			b.mod = false
+		if err := h.putPage(b.page, b.addr, b.bucket); err != nil {
+			return false, err
 		}
-		h.drop(b)
-	}
-	return nil
+		b.mod = false
+		return true, nil
+	})
 }
 
 // done trims the cache after an operation, keeping the first error.
