@@ -129,6 +129,7 @@ func New(file *os.File, info *Info) (*DB, error) {
 	return &DB{t: t}, nil
 }
 
+// keyNum decodes a native-endian 4-byte record number, or returns db.ErrInvalid.
 func keyNum(key []byte) (uint32, error) {
 	if len(key) != 4 {
 		return 0, db.ErrInvalid
@@ -297,7 +298,7 @@ func (r *DB) Put(key, data []byte, flag db.Flag) (rkey []byte, err error) {
 	return binary.NativeEndian.AppendUint32(nil, nrec), nil
 }
 
-// iput adds a recno item to the tree
+// iput adds a recno item to the tree.
 func (t *tree) iput(nrec uint32, data []byte, flag db.Flag) error {
 	// If the data won't fit on a page, store it on indirect pages.
 	var dflags byte
@@ -392,7 +393,7 @@ func (r *DB) Del(key []byte, flag db.Flag) (err error) {
 	return err
 }
 
-// rdelete deletes the data matching the specified key
+// rdelete deletes the data matching the specified key.
 func (t *tree) rdelete(nrec uint32) error {
 	e, err := t.search(nrec, sDelete)
 	if err != nil {
@@ -405,7 +406,7 @@ func (t *tree) rdelete(nrec uint32) error {
 	return nil
 }
 
-// dleaf deletes a single record from a recno leaf page
+// dleaf deletes a single record from a recno leaf page.
 func (t *tree) dleaf(h page, index int) error {
 	// Internal records are never deleted from internal pages, regardless
 	// of the records that caused them to be added being deleted.  Pages
@@ -478,7 +479,7 @@ func (t *tree) lookup(nrec uint32, stack *[]epgno) (epg, error) {
 	}
 }
 
-// record returns record data
+// record returns record data.
 func (t *tree) record(e epg) ([]byte, error) {
 	rl := e.page.rleaf(e.index)
 	if rl.flags&pBigData != 0 {
@@ -558,6 +559,7 @@ func (r *DB) Sync(flag db.Flag) error {
 	return r.sync(flag)
 }
 
+// sync implements Sync; the caller must hold the tree write lock.
 func (r *DB) sync(flag db.Flag) error {
 	t := r.t
 	if flag == db.RRecnoSync {
@@ -572,6 +574,8 @@ func (r *DB) sync(flag db.Flag) error {
 	return t.sync()
 }
 
+// syncFile reads in any remaining source records and rewrites and truncates
+// the flat file if it was modified.
 func (r *DB) syncFile() error {
 	t := r.t
 	if t.flags&(bRdOnly|rRdOnly|rInMem) != 0 || t.flags&rModified == 0 {
@@ -616,7 +620,7 @@ func (r *DB) syncFile() error {
 	return nil
 }
 
-// irec reads records from the source file up to top
+// irec reads records from the source file up to top.
 func (t *tree) irec(top uint32) error {
 	for t.nrecs < top {
 		var data []byte

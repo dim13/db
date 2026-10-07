@@ -45,22 +45,25 @@ const (
 
 const cursInit = 0x08 // cursor initialized
 
+// epgno references an item by page number, as kept on the descent stack.
 type epgno struct {
 	pgno  uint32
 	index int
 }
 
+// epg references an item on a page held in memory.
 type epg struct {
 	page  page
 	index int
 }
 
+// cursor is the sequential scan position used by Seq.
 type cursor struct {
 	rcursor uint32 // recno cursor (1-based)
 	flags   uint8
 }
 
-// tree is the in-memory btree holding records
+// tree is the in-memory btree holding records.
 type tree struct {
 	mu       sync.RWMutex // Get reads, everything else writes
 	mp       *mpool
@@ -82,11 +85,12 @@ type tree struct {
 	bval   byte
 }
 
+// validPSize reports whether n is an even page size within the allowed range.
 func validPSize(n int) bool {
 	return n >= minPSize && n <= maxPSize && n&1 == 0
 }
 
-// openTree opens a btree backed by file, or an in-memory tree if file is nil
+// openTree opens a btree backed by file, or an in-memory tree if file is nil.
 func openTree(file *os.File, psize, cache int, o binary.ByteOrder) (*tree, error) {
 	if psize != 0 && !validPSize(psize) {
 		return nil, fmt.Errorf("%w: page size %d", db.ErrInvalid, psize)
@@ -157,7 +161,7 @@ func openTree(file *os.File, psize, cache int, o binary.ByteOrder) (*tree, error
 	return t, nil
 }
 
-// nroot creates the root of a new tree
+// nroot creates the root of a new tree.
 func (t *tree) nroot() error {
 	if _, err := t.mp.get(pMeta); err == nil {
 		return nil
@@ -174,19 +178,23 @@ func (t *tree) nroot() error {
 	return nil
 }
 
+// page returns a view on b using the tree's byte order.
 func (t *tree) page(b []byte) page {
 	return page{b: b, o: t.o}
 }
 
+// get returns page pgno from the page cache.
 func (t *tree) get(pgno uint32) (page, error) {
 	b, err := t.mp.get(pgno)
 	return t.page(b), err
 }
 
+// dirty marks h as modified so it gets written back.
 func (t *tree) dirty(h page) {
 	t.mp.dirty(h.pgno())
 }
 
+// pop removes and returns the top of the parent stack, or false if it is empty.
 func (t *tree) pop() (epgno, bool) {
 	if len(t.stack) == 0 {
 		return epgno{}, false
@@ -196,7 +204,7 @@ func (t *tree) pop() (epgno, bool) {
 	return e, true
 }
 
-// close syncs and closes the tree
+// close syncs and closes the tree.
 func (t *tree) close() error {
 	if err := t.sync(); err != nil {
 		return err
@@ -214,6 +222,8 @@ func (t *tree) done(err *error) {
 	}
 }
 
+// sync writes the meta page and dirty pages to disk if the tree was modified;
+// it is a no-op for in-memory and read-only trees.
 func (t *tree) sync() error {
 	if t.flags&(bInMem|bRdOnly) != 0 || t.flags&bModified == 0 {
 		return nil
@@ -230,6 +240,7 @@ func (t *tree) sync() error {
 	return nil
 }
 
+// writeMeta stores the tree metadata in the meta page and marks it dirty.
 func (t *tree) writeMeta() error {
 	b, err := t.mp.get(pMeta)
 	if err != nil {
@@ -246,7 +257,7 @@ func (t *tree) writeMeta() error {
 	return nil
 }
 
-// bfree puts a page on the freelist
+// bfree puts a page on the freelist.
 func (t *tree) bfree(h page) {
 	h.setPrevpg(pInvalid)
 	h.setNextpg(t.free)
@@ -254,7 +265,7 @@ func (t *tree) bfree(h page) {
 	t.dirty(h)
 }
 
-// bnew gets a new page, preferably from the freelist
+// bnew gets a new page, preferably from the freelist.
 func (t *tree) bnew() (uint32, page, error) {
 	if t.free != pInvalid {
 		h, err := t.get(t.free)
@@ -270,7 +281,7 @@ func (t *tree) bnew() (uint32, page, error) {
 	return npg, t.page(b), nil
 }
 
-// ovflGet gets an overflow key/data item
+// ovflGet gets an overflow key/data item.
 func (t *tree) ovflGet(ref []byte) ([]byte, error) {
 	pg := t.o.Uint32(ref)
 	sz := int(t.o.Uint32(ref[4:]))
@@ -289,7 +300,7 @@ func (t *tree) ovflGet(ref []byte) ([]byte, error) {
 	return buf, nil
 }
 
-// ovflPut stores an overflow key/data item and returns its reference
+// ovflPut stores an overflow key/data item and returns its reference.
 func (t *tree) ovflPut(data []byte) ([]byte, error) {
 	plen := t.psize - dataOff
 	var first uint32
@@ -322,7 +333,7 @@ func (t *tree) ovflPut(data []byte) ([]byte, error) {
 	return ref, nil
 }
 
-// ovflDelete deletes an overflow chain
+// ovflDelete deletes an overflow chain.
 func (t *tree) ovflDelete(ref []byte) error {
 	pg := t.o.Uint32(ref)
 	sz := int(t.o.Uint32(ref[4:]))

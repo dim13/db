@@ -57,7 +57,7 @@ const (
 	ovflSize    = 2 * 2
 )
 
-// header is disk resident portion of hash table, always big endian
+// header is disk resident portion of hash table, always big endian.
 type header struct {
 	Magic     int32           // magic no for hash tables
 	Version   int32           // version id
@@ -91,6 +91,7 @@ type Info struct {
 	ReadOnly   bool               // refuse changes, never write
 }
 
+// buf is a cached bucket or overflow page.
 type buf struct {
 	addr   int    // address of this page
 	page   []byte // actual page data
@@ -209,6 +210,8 @@ func New(file *os.File, info *Info) (*DB, error) {
 	return h, nil
 }
 
+// initHash sets up a new, empty table header from defaults overridden by
+// info, failing with ErrInvalid if the bucket size exceeds maxBSize.
 func (h *DB) initHash(info *Info) error {
 	hdr := &h.hdr
 	nelem := 1
@@ -249,6 +252,8 @@ func (h *DB) initHash(info *Info) error {
 	return h.initHtab(nelem)
 }
 
+// initHtab sizes a new table for nelem elements: it sets bucket masks,
+// spares and segment count and allocates the first overflow bitmap.
 func (h *DB) initHtab(nelem int) error {
 	hdr := &h.hdr
 	// Divide number of elements by the fill factor and determine a
@@ -312,6 +317,8 @@ func (h *DB) Sync(flag db.Flag) error {
 	return h.sync()
 }
 
+// sync writes modified cached pages and the header to disk; it is a
+// no-op for in-memory, read-only or unmodified tables.  h.mu must be held.
 func (h *DB) sync() error {
 	if h.file == nil || h.readOnly || !h.modified {
 		return nil
@@ -331,6 +338,8 @@ func (h *DB) sync() error {
 	return nil
 }
 
+// flushMeta writes the header (big endian) and all loaded bitmap pages to
+// the file.
 func (h *DB) flushMeta() error {
 	hdr := &h.hdr
 	hdr.Magic = magic
@@ -350,6 +359,7 @@ func (h *DB) flushMeta() error {
 	return nil
 }
 
+// bucketToPage returns the file page number of bucket b.
 func (h *DB) bucketToPage(b int) int {
 	pg := b + int(h.hdr.HdrPages)
 	if b != 0 {
@@ -358,14 +368,18 @@ func (h *DB) bucketToPage(b int) int {
 	return pg
 }
 
+// oaddrToPage returns the file page number of overflow address o.
 func (h *DB) oaddrToPage(o int) int {
 	return h.bucketToPage(1<<(o>>splitShift)-1) + o&splitMask
 }
 
+// oaddrOf returns the overflow address of page o in split point s.
 func oaddrOf(s, o int) int {
 	return s<<splitShift + o
 }
 
+// offset returns the byte offset in the file of a bucket or, if bucket is
+// false, an overflow page at addr.
 func (h *DB) offset(addr int, bucket bool) int64 {
 	pg := h.oaddrToPage(addr)
 	if bucket {
@@ -374,7 +388,7 @@ func (h *DB) offset(addr int, bucket bool) int64 {
 	return int64(pg) << h.hdr.BShift
 }
 
-// getPage reads a page from disk, initializing missing or empty pages
+// getPage reads a page from disk, initializing missing or empty pages.
 func (h *DB) getPage(p []byte, addr int, bucket, disk, bitmap bool) error {
 	if h.file == nil || !disk {
 		h.pageInit(p)
@@ -397,6 +411,7 @@ func (h *DB) getPage(p []byte, addr int, bucket, disk, bitmap bool) error {
 	return nil
 }
 
+// putPage writes page p to its location in the file.
 func (h *DB) putPage(p []byte, addr int, bucket bool) error {
 	_, err := h.file.WriteAt(p, h.offset(addr, bucket))
 	return err
@@ -442,7 +457,7 @@ func (h *DB) getBuf(addr int, prev *buf, newpage bool) (*buf, error) {
 	return b, nil
 }
 
-// drop removes b from the cache, h.cmu held or callers exclusive
+// drop removes b from the cache, h.cmu held or callers exclusive.
 func (h *DB) drop(b *buf) {
 	m := &h.ovfls
 	if b.bucket {
@@ -489,6 +504,8 @@ func (h *DB) done(err *error) {
 	}
 }
 
+// sum returns the hash of key using a fresh hasher, so it is safe for
+// concurrent readers.
 func (h *DB) sum(key []byte) uint32 {
 	// A hasher per call, as concurrent readers hash keys.
 	s := h.hash()
@@ -496,6 +513,7 @@ func (h *DB) sum(key []byte) uint32 {
 	return s.Sum32()
 }
 
+// callHash returns the bucket number for key.
 func (h *DB) callHash(key []byte) int {
 	n := h.sum(key)
 	bucket := n & uint32(h.hdr.HighMask)
@@ -561,6 +579,8 @@ const (
 	actionDelete
 )
 
+// access looks up key and performs action on it, returning the data for
+// actionGet; it returns ErrNotFound or ErrKeyExist as appropriate.
 func (h *DB) access(action int, key, val []byte) ([]byte, error) {
 	bsize := int(h.hdr.BSize)
 	off := bsize
@@ -732,6 +752,8 @@ func (h *DB) Seq(_ []byte, flag db.Flag) (rkey, data []byte, err error) {
 	return key, data, nil
 }
 
+// expandTable adds one bucket to the table, growing segments, spares and
+// masks as needed, and splits the corresponding old bucket into it.
 func (h *DB) expandTable() error {
 	hdr := &h.hdr
 	hdr.MaxBucket++

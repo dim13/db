@@ -41,10 +41,12 @@ const (
 	nrInternal = 8  // size of RINTERNAL item
 )
 
+// lalign rounds n up to a multiple of 4.
 func lalign(n int) int {
 	return (n + 3) &^ 3
 }
 
+// nrleafdbt returns the aligned size of a recno leaf item holding dsize data bytes.
 func nrleafdbt(dsize int) int {
 	return lalign(4 + 1 + dsize)
 }
@@ -65,6 +67,7 @@ type mpool struct {
 	cached  atomic.Int64
 }
 
+// cpage is a cached page and its dirty and recently-used state.
 type cpage struct {
 	pgno uint32
 	b    []byte
@@ -72,6 +75,7 @@ type cpage struct {
 	used atomic.Bool // hit since last trim, gets a second chance
 }
 
+// newMpool returns a page cache over file of size bytes; limit is ignored for in-memory pools.
 func newMpool(file *os.File, psize int, size int64, limit int) *mpool {
 	if file == nil {
 		limit = 0 // nowhere to evict to
@@ -84,6 +88,7 @@ func newMpool(file *os.File, psize int, size int64, limit int) *mpool {
 	}
 }
 
+// lookup returns the cached page pgno, if any, without locking.
 func (m *mpool) lookup(pgno uint32) (*cpage, bool) {
 	v, ok := m.pages.Load(pgno)
 	if !ok {
@@ -92,11 +97,14 @@ func (m *mpool) lookup(pgno uint32) (*cpage, bool) {
 	return v.(*list.Element).Value.(*cpage), true
 }
 
+// add caches p as most recently used; the caller must hold m.mu.
 func (m *mpool) add(p *cpage) {
 	m.pages.Store(p.pgno, m.lru.PushFront(p))
 	m.cached.Add(1)
 }
 
+// get returns page pgno, reading it from file on a miss, or db.ErrNoPage
+// if it lies beyond the end of the pool.
 func (m *mpool) get(pgno uint32) ([]byte, error) {
 	if p, ok := m.lookup(pgno); ok {
 		if !p.used.Load() { // spare the cache line when set
@@ -124,6 +132,7 @@ func (m *mpool) get(pgno uint32) ([]byte, error) {
 	return p, nil
 }
 
+// new appends a zeroed, dirty page to the pool and returns its number and bytes.
 func (m *mpool) new() (uint32, []byte) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -135,12 +144,13 @@ func (m *mpool) new() (uint32, []byte) {
 }
 
 // dirty marks a page cached since get or new of the same operation, only
-// writers call it
+// writers call it.
 func (m *mpool) dirty(pgno uint32) {
 	p, _ := m.lookup(pgno)
 	p.mod = true
 }
 
+// write writes p to file and marks it clean; the caller must hold m.mu.
 func (m *mpool) write(p *cpage) error {
 	if _, err := m.file.WriteAt(p.b, int64(p.pgno)*int64(m.psize)); err != nil {
 		return err
@@ -149,6 +159,7 @@ func (m *mpool) write(p *cpage) error {
 	return nil
 }
 
+// sync writes all dirty pages and syncs the file; it is a no-op without a file.
 func (m *mpool) sync() error {
 	if m.file == nil {
 		return nil
@@ -165,7 +176,7 @@ func (m *mpool) sync() error {
 	return m.file.Sync()
 }
 
-// trim evicts least recently used pages down to limit, writing dirty ones
+// trim evicts least recently used pages down to limit, writing dirty ones.
 func (m *mpool) trim() error {
 	if m.limit == 0 || m.cached.Load() <= int64(m.limit) {
 		return nil
@@ -194,68 +205,84 @@ func (m *mpool) trim() error {
 	return nil
 }
 
-// page is a view on a tree page
+// page is a view on a tree page.
 type page struct {
 	b []byte
 	o binary.ByteOrder
 }
 
+// u16 returns the 16-bit value at off.
 func (p page) u16(off int) int {
 	return int(p.o.Uint16(p.b[off:]))
 }
 
+// setU16 stores v as a 16-bit value at off.
 func (p page) setU16(off, v int) {
 	p.o.PutUint16(p.b[off:], uint16(v))
 }
 
+// u32 returns the 32-bit value at off.
 func (p page) u32(off int) uint32 {
 	return p.o.Uint32(p.b[off:])
 }
 
+// setU32 stores v as a 32-bit value at off.
 func (p page) setU32(off int, v uint32) {
 	p.o.PutUint32(p.b[off:], v)
 }
 
+// pgno returns the page number from the header.
 func (p page) pgno() uint32 {
 	return p.u32(0)
 }
 
+// setPgno sets the page number in the header.
 func (p page) setPgno(v uint32) {
 	p.setU32(0, v)
 }
 
+// prevpg returns the previous page number from the header.
 func (p page) prevpg() uint32 {
 	return p.u32(4)
 }
 
+// setPrevpg sets the previous page number in the header.
 func (p page) setPrevpg(v uint32) {
 	p.setU32(4, v)
 }
 
+// nextpg returns the next page number from the header.
 func (p page) nextpg() uint32 {
 	return p.u32(8)
 }
 
+// setNextpg sets the next page number in the header.
 func (p page) setNextpg(v uint32) {
 	p.setU32(8, v)
 }
 
+// flags returns the page flags from the header.
 func (p page) flags() uint32 {
 	return p.u32(12)
 }
 
+// setFlags sets the page flags in the header.
 func (p page) setFlags(v uint32) {
 	p.setU32(12, v)
 }
 
+// lower returns the offset of the start of free space.
 func (p page) lower() int {
 	return p.u16(16)
 }
 
+// setLower sets the offset of the start of free space.
 func (p page) setLower(v int) {
 	p.setU16(16, v)
 }
 
+// upper returns the offset of the end of free space, mapping a stored 0
+// to 65536 for maximum-size pages.
 func (p page) upper() int {
 	if v := p.u16(18); v != 0 {
 		return v
@@ -263,27 +290,32 @@ func (p page) upper() int {
 	return 1 << 16 // psize 65536 wraps indx_t, as in C
 }
 
+// setUpper sets the offset of the end of free space.
 func (p page) setUpper(v int) {
 	p.setU16(18, v)
 }
 
+// linp returns the offset of item i from the index array.
 func (p page) linp(i int) int {
 	return p.u16(dataOff + 2*i)
 }
 
+// setLinp sets the offset of item i in the index array.
 func (p page) setLinp(i, v int) {
 	p.setU16(dataOff+2*i, v)
 }
 
+// nextIndex returns the number of items on the page.
 func (p page) nextIndex() int {
 	return (p.lower() - dataOff) / 2
 }
 
+// isType reports whether the page has any of the flags in t.
 func (p page) isType(t uint32) bool {
 	return p.flags()&t != 0
 }
 
-// insertLinp opens slot i in the index array
+// insertLinp opens slot i in the index array.
 func (p page) insertLinp(i int) {
 	n := p.nextIndex()
 	if i < n {
@@ -292,7 +324,7 @@ func (p page) insertLinp(i int) {
 	p.setLower(p.lower() + 2)
 }
 
-// removeItem removes item i of nbytes length, packing remaining items
+// removeItem removes item i of nbytes length, packing remaining items.
 func (p page) removeItem(i, nbytes int) {
 	to := p.linp(i)
 	from := p.upper()
@@ -316,18 +348,20 @@ func (p page) removeItem(i, nbytes int) {
 	p.setLower(p.lower() - 2)
 }
 
-// appendItem copies item to the top of free space and points index i to it
+// appendItem copies item to the top of free space and points index i to it.
 func (p page) appendItem(i int, item []byte) {
 	p.setUpper(p.upper() - len(item))
 	p.setLinp(i, p.upper())
 	copy(p.b[p.upper():], item)
 }
 
+// rinternal is a decoded recno internal item: record count and child page.
 type rinternal struct {
 	nrecs uint32
 	pgno  uint32
 }
 
+// rinternal decodes recno internal item i.
 func (p page) rinternal(i int) rinternal {
 	off := p.linp(i)
 	return rinternal{
@@ -336,12 +370,14 @@ func (p page) rinternal(i int) rinternal {
 	}
 }
 
+// setRinternal overwrites recno internal item i in place.
 func (p page) setRinternal(i int, nrecs, pgno uint32) {
 	off := p.linp(i)
 	p.setU32(off, nrecs)
 	p.setU32(off+4, pgno)
 }
 
+// rleaf is a decoded recno leaf item.
 type rleaf struct {
 	dsize int
 	flags byte
@@ -349,6 +385,7 @@ type rleaf struct {
 	raw   []byte
 }
 
+// rleaf decodes recno leaf item i; its data and raw slices alias the page.
 func (p page) rleaf(i int) rleaf {
 	off := p.linp(i)
 	dsize := int(p.u32(off))
@@ -360,7 +397,7 @@ func (p page) rleaf(i int) rleaf {
 	}
 }
 
-// item returns raw bytes of item i, whatever page type
+// item returns raw bytes of item i, whatever page type.
 func (p page) item(i int) ([]byte, error) {
 	switch p.flags() & pType {
 	case pRInternal:
@@ -372,18 +409,20 @@ func (p page) item(i int) ([]byte, error) {
 	return nil, db.ErrPageType
 }
 
+// writeRLeaf encodes a recno leaf item with data and flags at off.
 func (p page) writeRLeaf(off int, data []byte, flags byte) {
 	p.setU32(off, uint32(len(data)))
 	p.b[off+4] = flags
 	copy(p.b[off+5:], data)
 }
 
+// writeRInternal encodes a recno internal item at off.
 func (p page) writeRInternal(off int, nrecs, pgno uint32) {
 	p.setU32(off, nrecs)
 	p.setU32(off+4, pgno)
 }
 
-// initPage sets up an empty page header
+// init sets up an empty page header.
 func (p page) init(pgno, prev, next, flags uint32, psize int) {
 	p.setPgno(pgno)
 	p.setPrevpg(prev)

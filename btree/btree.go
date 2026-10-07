@@ -67,16 +67,19 @@ type Info struct {
 	ReadOnly       bool                  // refuse changes, never write
 }
 
+// epgno references an item by page number, as kept on the descent stack.
 type epgno struct {
 	pgno  uint32
 	index int
 }
 
+// epg references an item on a page held in memory.
 type epg struct {
 	page  page
 	index int
 }
 
+// cursor is the sequential scan position used by Seq.
 type cursor struct {
 	pg    epgno  // saved tree reference
 	key   []byte // saved key, or nil
@@ -106,6 +109,7 @@ type DB struct {
 	nrecs    uint32 // meta-data, preserved
 }
 
+// validPSize reports whether n is an even page size within [minPSize, maxPSize].
 func validPSize(n int) bool {
 	return n >= minPSize && n <= maxPSize && n&1 == 0
 }
@@ -215,7 +219,7 @@ func New(file *os.File, info *Info) (*DB, error) {
 	return t, nil
 }
 
-// nroot creates the root of a new tree
+// nroot creates the root of a new tree.
 func (t *DB) nroot() error {
 	if _, err := t.mp.get(pMeta); err == nil {
 		return nil
@@ -232,23 +236,28 @@ func (t *DB) nroot() error {
 	return nil
 }
 
+// page wraps b as a page view using the tree's byte order.
 func (t *DB) page(b []byte) page {
 	return page{b: b, o: t.o}
 }
 
+// get returns page pgno from the page cache, reading it from disk if needed.
 func (t *DB) get(pgno uint32) (page, error) {
 	b, err := t.mp.get(pgno)
 	return t.page(b), err
 }
 
+// dirty marks page h as modified so it is written on sync or eviction.
 func (t *DB) dirty(h page) {
 	t.mp.dirty(h.pgno())
 }
 
+// push records a parent page and index on the search stack.
 func (t *DB) push(pgno uint32, index int) {
 	t.stack = append(t.stack, epgno{pgno: pgno, index: index})
 }
 
+// pop removes and returns the top of the search stack, or false if it is empty.
 func (t *DB) pop() (epgno, bool) {
 	if len(t.stack) == 0 {
 		return epgno{}, false
@@ -280,7 +289,6 @@ func (t *DB) Fd() uintptr {
 	return t.file.Fd()
 }
 
-// Sync writes all changes to disk, flag must be 0.
 // done trims the page cache after an operation, keeping the first error.
 func (t *DB) done(err *error) {
 	if terr := t.mp.trim(); *err == nil {
@@ -288,6 +296,7 @@ func (t *DB) done(err *error) {
 	}
 }
 
+// Sync writes all changes to disk, flag must be 0, otherwise it returns ErrInvalid.
 func (t *DB) Sync(flag db.Flag) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -297,6 +306,8 @@ func (t *DB) Sync(flag db.Flag) error {
 	return t.sync()
 }
 
+// sync writes meta-data and dirty pages to disk and clears bModified.
+// It is a no-op for in-memory, read-only or unmodified trees; callers hold t.mu.
 func (t *DB) sync() error {
 	if t.flags&(bInMem|bRdOnly) != 0 || t.flags&bModified == 0 {
 		return nil
@@ -313,6 +324,8 @@ func (t *DB) sync() error {
 	return nil
 }
 
+// writeMeta stores the tree header (magic, version, page size, free list,
+// record count and flags) in the meta page and marks it dirty.
 func (t *DB) writeMeta() error {
 	b, err := t.mp.get(pMeta)
 	if err != nil {
@@ -329,7 +342,7 @@ func (t *DB) writeMeta() error {
 	return nil
 }
 
-// bfree puts a page on the freelist
+// bfree puts a page on the freelist.
 func (t *DB) bfree(h page) {
 	h.setPrevpg(pInvalid)
 	h.setNextpg(t.free)
@@ -337,7 +350,7 @@ func (t *DB) bfree(h page) {
 	t.dirty(h)
 }
 
-// bnew gets a new page, preferably from the freelist
+// bnew gets a new page, preferably from the freelist.
 func (t *DB) bnew() (uint32, page, error) {
 	if t.free != pInvalid {
 		h, err := t.get(t.free)
@@ -353,7 +366,7 @@ func (t *DB) bnew() (uint32, page, error) {
 	return npg, t.page(b), nil
 }
 
-// ovflGet gets an overflow key/data item
+// ovflGet gets an overflow key/data item.
 func (t *DB) ovflGet(ref []byte) ([]byte, error) {
 	pg := t.o.Uint32(ref)
 	sz := int(t.o.Uint32(ref[4:]))
@@ -372,7 +385,7 @@ func (t *DB) ovflGet(ref []byte) ([]byte, error) {
 	return buf, nil
 }
 
-// ovflPut stores an overflow key/data item and returns its reference
+// ovflPut stores an overflow key/data item and returns its reference.
 func (t *DB) ovflPut(data []byte) ([]byte, error) {
 	plen := t.psize - dataOff
 	var first uint32
@@ -405,7 +418,7 @@ func (t *DB) ovflPut(data []byte) ([]byte, error) {
 	return ref, nil
 }
 
-// ovflDelete deletes an overflow chain
+// ovflDelete deletes an overflow chain.
 func (t *DB) ovflDelete(ref []byte) error {
 	pg := t.o.Uint32(ref)
 	sz := int(t.o.Uint32(ref[4:]))
@@ -430,7 +443,7 @@ func (t *DB) ovflDelete(ref []byte) error {
 	return nil
 }
 
-// ret builds return key/data pair
+// ret builds return key/data pair.
 func (t *DB) ret(e epg, wantKey, wantData bool) (key, data []byte, err error) {
 	bl := e.page.bleaf(e.index)
 	if wantKey {
@@ -454,7 +467,7 @@ func (t *DB) ret(e epg, wantKey, wantData bool) (key, data []byte, err error) {
 	return key, data, nil
 }
 
-// compare compares a key to a given record
+// compare compares a key to a given record.
 func (t *DB) compare(k1 []byte, e epg) (int, error) {
 	h := e.page
 	// The left-most key on internal pages, at any level of the tree, is
@@ -480,13 +493,13 @@ func (t *DB) compare(k1 []byte, e epg) (int, error) {
 	return t.cmp(k1, k2), nil
 }
 
-// equal reports if key matches the record
+// equal reports if key matches the record.
 func (t *DB) equal(key []byte, e epg) (bool, error) {
 	cmp, err := t.compare(key, e)
 	return cmp == 0 && err == nil, err
 }
 
-// defPrefix returns number of bytes needed to distinguish b from a
+// defPrefix returns number of bytes needed to distinguish b from a.
 func defPrefix(a, b []byte) int {
 	n := min(len(a), len(b))
 	for i := range n {
@@ -576,7 +589,7 @@ func (t *DB) lookup(key []byte, stack *[]epgno) (cur epg, exact bool, leaf uint3
 }
 
 // sibling checks for an exact match at index of sibling page pg, -1 for
-// its last index
+// its last index.
 func (t *DB) sibling(pg uint32, index int, key []byte) (epg, bool, error) {
 	if pg == pInvalid {
 		return epg{}, false, nil
@@ -629,6 +642,8 @@ func (t *DB) Put(key, data []byte, flag db.Flag) (rkey []byte, err error) {
 	return key, nil
 }
 
+// put inserts key/data, moving oversized items to overflow pages and splitting
+// the page if it is full; callers hold t.mu for writing.
 func (t *DB) put(key, data []byte, flag db.Flag) error {
 	if t.flags&bRdOnly != 0 {
 		return db.ErrReadOnly
@@ -752,7 +767,7 @@ func (t *DB) put(key, data []byte, flag db.Flag) error {
 	return nil
 }
 
-// fast does a quick check for sorted data
+// fast does a quick check for sorted data.
 func (t *DB) fast(skey, key, data []byte) (*epg, bool) {
 	h, err := t.get(t.last.pgno)
 	if err != nil {

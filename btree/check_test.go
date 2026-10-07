@@ -14,7 +14,7 @@ import (
 	"github.com/dim13/db/dbtest"
 )
 
-// check verifies leaves are non-empty and linked in order
+// check verifies leaves are non-empty and linked in order.
 func (t *DB) check() error {
 	var leaves []uint32
 	var walk func(pg uint32) error

@@ -15,7 +15,7 @@ import (
 )
 
 // check walks all bucket chains verifying overflow pages are referenced
-// once, allocated, and keys counted match NKeys
+// once, allocated, and keys counted match NKeys.
 func (h *DB) check() error {
 	seen := map[int]string{}
 	var keys int

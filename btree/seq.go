@@ -31,7 +31,7 @@ func (t *DB) Seq(key []byte, flag db.Flag) (rkey, data []byte, err error) {
 	return t.ret(e, true, true)
 }
 
-// seqset sets the sequential scan to a specific key
+// seqset sets the sequential scan to a specific key.
 func (t *DB) seqset(key []byte, flag db.Flag) (epg, error) {
 	switch flag {
 	case db.RCursor:
@@ -74,7 +74,7 @@ func (t *DB) seqset(key []byte, flag db.Flag) (epg, error) {
 	}
 }
 
-// seqadv advances the sequential scan
+// seqadv advances the sequential scan.
 func (t *DB) seqadv(flag db.Flag) (epg, error) {
 	c := &t.cursor
 
@@ -128,7 +128,7 @@ func (t *DB) seqadv(flag db.Flag) (epg, error) {
 	return epg{page: h, index: index}, nil
 }
 
-// first finds the first entry greater than or equal to key
+// first finds the first entry greater than or equal to key.
 func (t *DB) first(key []byte) (epg, error) {
 	ep, exact, err := t.search(key)
 	if err != nil {
@@ -181,7 +181,7 @@ func (t *DB) first(key []byte) (epg, error) {
 	return e, nil
 }
 
-// setcur sets the cursor to an entry in the tree
+// setcur sets the cursor to an entry in the tree.
 func (t *DB) setcur(pgno uint32, index int) {
 	t.cursor.key = nil
 	t.cursor.flags &^= cursAcquire | cursAfter | cursBefore

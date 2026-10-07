@@ -26,53 +26,63 @@ import (
  * Amount of free space on the page is:  p[p[0] + 1]
  */
 
-// hpage is a view on a page as array of uint16
+// hpage is a view on a page as array of uint16.
 type hpage struct {
 	b []byte
 	o binary.ByteOrder
 }
 
+// page returns an hpage view of b using the table's byte order.
 func (h *DB) page(b []byte) hpage {
 	return hpage{b: b, o: h.o}
 }
 
+// at returns the i-th uint16 of the page.
 func (p hpage) at(i int) int {
 	return int(p.o.Uint16(p.b[2*i:]))
 }
 
+// set stores v as the i-th uint16 of the page.
 func (p hpage) set(i, v int) {
 	p.o.PutUint16(p.b[2*i:], uint16(v))
 }
 
+// freespace returns the amount of free space on the page.
 func (p hpage) freespace() int {
 	return p.at(p.at(0) + 1)
 }
 
+// setFreespace sets the amount of free space on the page.
 func (p hpage) setFreespace(v int) {
 	p.set(p.at(0)+1, v)
 }
 
+// offset returns the offset of the start of the data area.
 func (p hpage) offset() int {
 	return p.at(p.at(0) + 2)
 }
 
+// setOffset sets the offset of the start of the data area.
 func (p hpage) setOffset(v int) {
 	p.set(p.at(0)+2, v)
 }
 
+// pairsize returns the page space a pair needs, including its two offsets.
 func pairsize(key, val []byte) int {
 	return 2*2 + len(key) + len(val)
 }
 
+// pageMeta returns the size in bytes of the page header for n entries.
 func pageMeta(n int) int {
 	return (n + 3) * 2
 }
 
-// pairfits reports if pair fits on page with room to append an overflow page
+// pairfits reports if pair fits on page with room to append an overflow page.
 func (p hpage) pairfits(key, val []byte) bool {
 	return p.at(2) >= realKey && pairsize(key, val)+ovflSize <= p.freespace()
 }
 
+// pageInit initializes b as an empty page.
 func (h *DB) pageInit(b []byte) {
 	p := h.page(b)
 	p.set(0, 0)
@@ -80,7 +90,7 @@ func (h *DB) pageInit(b []byte) {
 	p.set(2, int(h.hdr.BSize))
 }
 
-// putpair puts pair on page, room must be verified with pairfits
+// putpair puts pair on page, room must be verified with pairfits.
 func (p hpage) putpair(key, val []byte) {
 	n := p.at(0)
 
@@ -102,6 +112,8 @@ func (p hpage) putpair(key, val []byte) {
 	p.set(n+2, off)
 }
 
+// delpair removes the pair at ndx from the page, compacting it, and marks
+// the buffer modified; big pairs are handed to bigDelete.
 func (h *DB) delpair(bufp *buf, ndx int) error {
 	bp := h.page(bufp.page)
 	n := bp.at(0)
@@ -138,6 +150,8 @@ func (h *DB) delpair(bufp *buf, ndx int) error {
 	return nil
 }
 
+// splitPage moves pairs of obucket that now hash to nbucket over to it,
+// falling back to uglySplit on overflow or big pairs.
 func (h *DB) splitPage(obucket, nbucket int) error {
 	bsize := int(h.hdr.BSize)
 	copyto, off := bsize, bsize
@@ -188,7 +202,7 @@ func (h *DB) splitPage(obucket, nbucket int) error {
 }
 
 // uglySplit is called when we encounter an overflow or big key/data page
-// during split handling
+// during split handling.
 func (h *DB) uglySplit(obucket int, oldp, newp *buf, copyto, moved int) error {
 	bsize := int(h.hdr.BSize)
 	bufp := oldp
@@ -271,7 +285,7 @@ func (h *DB) uglySplit(obucket int, oldp, newp *buf, copyto, moved int) error {
 	return nil
 }
 
-// addel adds the given pair to the page
+// addel adds the given pair to the page.
 func (h *DB) addel(bufp *buf, key, val []byte) error {
 	bp := h.page(bufp.page)
 	var doExpand bool
@@ -330,6 +344,8 @@ func (h *DB) addel(bufp *buf, key, val []byte) error {
 	return nil
 }
 
+// addOvflpage allocates a new overflow page, links it at the end of bufp
+// and returns it.  It fixes a dynamic fill factor on first use.
 func (h *DB) addOvflpage(bufp *buf) (*buf, error) {
 	sp := h.page(bufp.page)
 
@@ -360,7 +376,7 @@ func (h *DB) addOvflpage(bufp *buf) (*buf, error) {
 	return nb, nil
 }
 
-// squeezeKey puts pair on page whose last entry is an overflow pointer
+// squeezeKey puts pair on page whose last entry is an overflow pointer.
 func (h *DB) squeezeKey(sp hpage, key, val []byte) {
 	n := sp.at(0)
 	freeSpace := sp.freespace()
@@ -380,21 +396,24 @@ func (h *DB) squeezeKey(sp hpage, key, val []byte) {
 	sp.setOffset(off)
 }
 
+// word returns the i-th uint32 of bitmap m.
 func (h *DB) word(m []byte, i int) uint32 {
 	return h.o.Uint32(m[4*i:])
 }
 
+// setbit sets bit n in bitmap m.
 func (h *DB) setbit(m []byte, n int) {
 	i := n / bitsPerMap
 	h.o.PutUint32(m[4*i:], h.word(m, i)|1<<(n%bitsPerMap))
 }
 
+// clrbit clears bit n in bitmap m.
 func (h *DB) clrbit(m []byte, n int) {
 	i := n / bitsPerMap
 	h.o.PutUint32(m[4*i:], h.word(m, i)&^(1<<(n%bitsPerMap)))
 }
 
-// ibitmap initializes a new bitmap page
+// ibitmap initializes a new bitmap page.
 func (h *DB) ibitmap(pnum, nbits, ndx int) {
 	ip := make([]byte, h.hdr.BSize)
 	h.nmaps++
@@ -408,6 +427,8 @@ func (h *DB) ibitmap(pnum, nbits, ndx int) {
 	h.mapp[ndx] = ip
 }
 
+// fetchBitmap reads bitmap page ndx from disk and caches it, returning
+// ErrOverflow if ndx is beyond the allocated maps.
 func (h *DB) fetchBitmap(ndx int) ([]byte, error) {
 	if ndx >= h.nmaps {
 		return nil, db.ErrOverflow
@@ -420,6 +441,7 @@ func (h *DB) fetchBitmap(ndx int) ([]byte, error) {
 	return m, nil
 }
 
+// bitmap returns bitmap page ndx, loading it from disk if not cached.
 func (h *DB) bitmap(ndx int) ([]byte, error) {
 	if m := h.mapp[ndx]; m != nil {
 		return m, nil
@@ -427,6 +449,8 @@ func (h *DB) bitmap(ndx int) ([]byte, error) {
 	return h.fetchBitmap(ndx)
 }
 
+// firstFree returns the index of the lowest clear bit in m, or bitsPerMap
+// if all are set.
 func firstFree(m uint32) int {
 	for i := range bitsPerMap {
 		if m&(1<<i) == 0 {
@@ -436,7 +460,7 @@ func firstFree(m uint32) int {
 	return bitsPerMap
 }
 
-// overflowPage allocates an overflow page and returns its address
+// overflowPage allocates an overflow page and returns its address.
 func (h *DB) overflowPage() (int, error) {
 	hdr := &h.hdr
 	shift := int(hdr.BShift) + byteShift
@@ -544,7 +568,7 @@ func (h *DB) overflowPage() (int, error) {
 	return oaddrOf(splitnum, offset), nil
 }
 
-// freeOvflpage marks overflow page as free
+// freeOvflpage marks overflow page as free.
 func (h *DB) freeOvflpage(obufp *buf) error {
 	hdr := &h.hdr
 	addr := obufp.addr

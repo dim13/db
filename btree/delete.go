@@ -52,7 +52,7 @@ func (t *DB) Del(key []byte, flag db.Flag) (err error) {
 	return err
 }
 
-// stkacq acquires a stack for page pgno holding key, so we can delete it
+// stkacq acquires a stack for page pgno holding key, so we can delete it.
 func (t *DB) stkacq(key []byte, pgno uint32) (page, error) {
 	// Find the first occurrence of the key in the tree.
 	// Start from the leaf the stack leads to, search may have stepped
@@ -151,7 +151,7 @@ func (t *DB) stkacq(key []byte, pgno uint32) (page, error) {
 	return t.get(pgno)
 }
 
-// bdelete deletes all key/data pairs matching the specified key
+// bdelete deletes all key/data pairs matching the specified key.
 func (t *DB) bdelete(key []byte) error {
 	var deleted bool
 	for {
@@ -232,7 +232,7 @@ func (t *DB) bdelete(key []byte) error {
 }
 
 // pdeleteKey deletes page h holding key, unlike 1.85 it reacquires the
-// stack if search stepped to a sibling page
+// stack if search stepped to a sibling page.
 func (t *DB) pdeleteKey(key []byte, h page) error {
 	if h.pgno() != t.leaf {
 		var err error
@@ -243,7 +243,7 @@ func (t *DB) pdeleteKey(key []byte, h page) error {
 	return t.pdelete(h)
 }
 
-// pdelete deletes a single page from the tree
+// pdelete deletes a single page from the tree.
 func (t *DB) pdelete(h page) error {
 	// Walk the parent page stack.  We've just deleted a page, so we
 	// have to delete the key from the parent page.  If the delete from
@@ -303,7 +303,7 @@ func (t *DB) pdelete(h page) error {
 	return nil
 }
 
-// dleaf deletes a single record from a leaf page
+// dleaf deletes a single record from a leaf page.
 func (t *DB) dleaf(key []byte, h page, index int) error {
 	c := &t.cursor
 	// If this record is referenced by the cursor, delete the cursor.
@@ -336,7 +336,7 @@ func (t *DB) dleaf(key []byte, h page, index int) error {
 	return nil
 }
 
-// curdel deletes the cursor
+// curdel deletes the cursor.
 func (t *DB) curdel(key []byte, h page, index int) error {
 	// If there are duplicates, move forward or backward to one.
 	// Otherwise, copy the key into the cursor area.
@@ -410,7 +410,7 @@ func (t *DB) curdel(key []byte, h page, index int) error {
 	return nil
 }
 
-// relink links around a deleted page
+// relink links around a deleted page.
 func (t *DB) relink(h page) error {
 	if h.nextpg() != pInvalid {
 		pg, err := t.get(h.nextpg())

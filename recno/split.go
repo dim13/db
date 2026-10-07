@@ -1,7 +1,7 @@
 package recno
 
 // split splits page sp and inserts data with flags at index skip,
-// ilen is the insert length
+// ilen is the insert length.
 func (t *tree) split(sp page, data []byte, flags byte, ilen, skip int) error {
 	// Split the page into two pages, l and r.  The split routines return
 	// the page into which the key should be inserted and with skip set
@@ -101,7 +101,7 @@ func (t *tree) split(sp page, data []byte, flags byte, ilen, skip int) error {
 	return nil
 }
 
-// bpage splits a non-root page of a btree
+// bpage splits a non-root page of a btree.
 func (t *tree) bpage(h page, skip *int, ilen int) (tp, l, r page, err error) {
 	// Put the new right page for the split into place.
 	var npg uint32
@@ -148,7 +148,7 @@ func (t *tree) bpage(h page, skip *int, ilen int) (tp, l, r page, err error) {
 	return r, h, r, nil
 }
 
-// root splits the root page of a btree
+// root splits the root page of a btree.
 func (t *tree) root(h page, skip *int, ilen int) (tp, l, r page, err error) {
 	var lnpg, rnpg uint32
 	if lnpg, l, err = t.bnew(); err != nil {
@@ -166,7 +166,7 @@ func (t *tree) root(h page, skip *int, ilen int) (tp, l, r page, err error) {
 	return r, l, r, err
 }
 
-// rroot fixes up the recno root page after it has been split
+// rroot fixes up the recno root page after it has been split.
 func (t *tree) rroot(h, l, r page) {
 	count := func(p page) uint32 {
 		if p.isType(pRLeaf) {
@@ -186,7 +186,7 @@ func (t *tree) rroot(h, l, r page) {
 }
 
 // psplit does the real work of splitting the page, reporting whether the
-// open slot ended up on the left page
+// open slot ended up on the left page.
 func (t *tree) psplit(h, l, r page, pskip *int, ilen int) (left bool, err error) {
 	// Split the data to the left and right pages.  Leave the skip index
 	// open.
@@ -275,7 +275,7 @@ func (t *tree) psplit(h, l, r page, pskip *int, ilen int) (left bool, err error)
 	return left, nil
 }
 
-// pageTotal returns the number of recno entries below a page
+// pageTotal returns the number of recno entries below a page.
 func pageTotal(h page) uint32 {
 	var recs uint32
 	for i := range h.nextIndex() {

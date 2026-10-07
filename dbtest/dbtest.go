@@ -34,6 +34,7 @@ func Gen(i int) ([]byte, []byte) {
 	return key, data
 }
 
+// sum returns the 32-bit FNV-1a hash of b, used to fingerprint dump records.
 func sum(b []byte) uint32 {
 	h := fnv.New32a()
 	h.Write(b)

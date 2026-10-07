@@ -3,7 +3,7 @@ package btree
 import "github.com/dim13/db"
 
 // split splits page sp and inserts key/data with flags at index skip,
-// ilen is the insert length
+// ilen is the insert length.
 func (t *DB) split(sp page, key, data []byte, flags byte, ilen, skip int) error {
 	// Split the page into two pages, l and r.  The split routines return
 	// the page into which the key should be inserted and with skip set
@@ -136,7 +136,7 @@ func (t *DB) split(sp page, key, data []byte, flags byte, ilen, skip int) error 
 	return nil
 }
 
-// bpage splits a non-root page of a btree
+// bpage splits a non-root page of a btree.
 func (t *DB) bpage(h page, skip *int, ilen int) (tp, l, r page, err error) {
 	// Put the new right page for the split into place.
 	var npg uint32
@@ -183,7 +183,7 @@ func (t *DB) bpage(h page, skip *int, ilen int) (tp, l, r page, err error) {
 	return r, h, r, nil
 }
 
-// root splits the root page of a btree
+// root splits the root page of a btree.
 func (t *DB) root(h page, skip *int, ilen int) (tp, l, r page, err error) {
 	var lnpg, rnpg uint32
 	if lnpg, l, err = t.bnew(); err != nil {
@@ -201,7 +201,7 @@ func (t *DB) root(h page, skip *int, ilen int) (tp, l, r page, err error) {
 	return r, l, r, err
 }
 
-// broot fixes up the btree root page after it has been split
+// broot fixes up the btree root page after it has been split.
 func (t *DB) broot(h, l, r page) error {
 	// If the root page was a leaf page, change it into an internal page.
 	// We copy the key we split on (but not the key's data, in the case of
@@ -241,7 +241,7 @@ func (t *DB) broot(h, l, r page) error {
 }
 
 // psplit does the real work of splitting the page, reporting whether the
-// open slot ended up on the left page
+// open slot ended up on the left page.
 func (t *DB) psplit(h, l, r page, pskip *int, ilen int) (left bool, err error) {
 	// Split the data to the left and right pages.  Leave the skip index
 	// open.  Additionally, make some effort not to split on an overflow
@@ -356,6 +356,7 @@ func (t *DB) psplit(h, l, r page, pskip *int, ilen int) (left bool, err error) {
 	return left, nil
 }
 
+// isBigKey reports whether item i stores its key on overflow pages.
 func (p page) isBigKey(i int) bool {
 	switch p.flags() & pType {
 	case pBInternal:
@@ -366,7 +367,7 @@ func (p page) isBigKey(i int) bool {
 	return false
 }
 
-// preserve marks a chain of pages as used by an internal node
+// preserve marks a chain of pages as used by an internal node.
 func (t *DB) preserve(pg uint32) error {
 	h, err := t.get(pg)
 	if err != nil {

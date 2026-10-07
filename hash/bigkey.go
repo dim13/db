@@ -2,13 +2,13 @@ package hash
 
 import "bytes"
 
-// next returns the overflow page referenced by the last entry pair of bufp
+// next returns the overflow page referenced by the last entry pair of bufp.
 func (h *DB) next(bufp *buf) (*buf, error) {
 	bp := h.page(bufp.page)
 	return h.getBuf(bp.at(bp.at(0)-1), bufp, false)
 }
 
-// bigInsert inserts a key/data pair too big for a page
+// bigInsert inserts a key/data pair too big for a page.
 func (h *DB) bigInsert(bufp *buf, key, val []byte) error {
 	p := h.page(bufp.page)
 	keyData, valData := key, val
@@ -147,7 +147,7 @@ func (h *DB) bigDelete(bufp *buf) error {
 	return nil
 }
 
-// findBigpair reports if key matches the big pair at ndx
+// findBigpair reports if key matches the big pair at ndx.
 func (h *DB) findBigpair(bufp *buf, ndx int, key []byte) (int, bool, error) {
 	bsize := int(h.hdr.BSize)
 	bp := h.page(bufp.page)
@@ -171,7 +171,7 @@ func (h *DB) findBigpair(bufp *buf, ndx int, key []byte) (int, bool, error) {
 }
 
 // findLastPage finds the last page of the big pair starting at bufp, and
-// returns page number of the overflow page following it, 0 if none
+// returns page number of the overflow page following it, 0 if none.
 func (h *DB) findLastPage(bufp *buf) (int, *buf, error) {
 	bp := h.page(bufp.page)
 	var err error
@@ -194,7 +194,7 @@ func (h *DB) findLastPage(bufp *buf) (int, *buf, error) {
 	return 0, bufp, nil
 }
 
-// setCursor advances the scan cursor past the big pair ending on bufp
+// setCursor advances the scan cursor past the big pair ending on bufp.
 func (h *DB) setCursor(bufp *buf) error {
 	bp := h.page(bufp.page)
 	h.cndx = 1
@@ -216,7 +216,7 @@ func (h *DB) setCursor(bufp *buf) error {
 }
 
 // bigReturn returns the data for the key/data pair that begins on this
-// page at this index (index should always be 1)
+// page at this index (index should always be 1).
 func (h *DB) bigReturn(bufp *buf, ndx int, setCurrent bool) ([]byte, error) {
 	bp := h.page(bufp.page)
 	var err error
@@ -262,7 +262,7 @@ func (h *DB) bigReturn(bufp *buf, ndx int, setCurrent bool) ([]byte, error) {
 	return append(bytes.Clone(head), data...), nil
 }
 
-// collectData collects data continued on pages starting at bufp
+// collectData collects data continued on pages starting at bufp.
 func (h *DB) collectData(bufp *buf, set bool) ([]byte, error) {
 	var data []byte
 	var err error
@@ -284,7 +284,7 @@ func (h *DB) collectData(bufp *buf, set bool) ([]byte, error) {
 	}
 }
 
-// bigKeydata collects key and data of the big pair starting at bufp
+// bigKeydata collects key and data of the big pair starting at bufp.
 func (h *DB) bigKeydata(bufp *buf, set bool) ([]byte, []byte, error) {
 	var key []byte
 	var err error
@@ -305,11 +305,13 @@ func (h *DB) bigKeydata(bufp *buf, set bool) ([]byte, []byte, error) {
 	}
 }
 
+// splitReturn holds the pages bigSplit leaves in use for the old and new
+// buckets, and the next overflow page to continue splitting from.
 type splitReturn struct {
 	newp, oldp, nextp *buf
 }
 
-// bigSplit moves the big pair at bigKeyp to op or np
+// bigSplit moves the big pair at bigKeyp to op or np.
 func (h *DB) bigSplit(op, np, bigKeyp *buf, obucket int) (splitReturn, error) {
 	var ret splitReturn
 	bp := bigKeyp
