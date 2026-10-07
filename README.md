@@ -17,8 +17,8 @@ the standard library.
 | [ndbm](https://pkg.go.dev/github.com/dim13/db/ndbm) | `ndbm(3)` interface on hash |
 | [hsearch](https://pkg.go.dev/github.com/dim13/db/hsearch) | `hsearch(3)` in-memory table on hash |
 
-Each package has a `New(file, info)` returning a `*DB` that implements
-`db.DB`.  A nil file gives an in-memory database, an empty file a new
+Each access method has a `New(file, info)` returning a `*DB` that
+implements `db.DB`.  A nil file gives an in-memory database, an empty file a new
 one, and a nil `Info` the defaults.
 
 ```go
@@ -50,6 +50,22 @@ A database is safe for concurrent use: `Get` calls run in parallel,
 other methods one at a time, and `Seq` has a single cursor shared by
 all callers.
 
+`ndbm.Open(name, flag, perm)` opens `name.db` with `os.OpenFile` flags
+and returns a `*DBM` that implements `db.DBM`:
+
+```go
+d, err := ndbm.Open("test", os.O_RDWR|os.O_CREATE, 0644)
+if err != nil {
+	log.Fatal(err)
+}
+defer d.Close()
+
+d.Store([]byte("key"), []byte("value"), db.DBMReplace)
+for k, err := d.FirstKey(); err == nil; k, err = d.NextKey() {
+	fmt.Printf("%s\n", k)
+}
+```
+
 File formats are described in [doc/btree.txt](doc/btree.txt),
 [doc/hash.txt](doc/hash.txt) and [doc/recno.txt](doc/recno.txt).
 
@@ -70,4 +86,7 @@ File formats are described in [doc/btree.txt](doc/btree.txt),
   onto a big pair tail, overflow page 2047 never reused.
 - Non-native byte order btrees written by C with overflow data but inline
   key are not readable (C's `bt_conv.c` swaps the wrong bytes there).
+- `ndbm` returns errors instead of `dbm_error`/`dbm_clearerr`, and
+  `Close` reports write errors.  `dbm_forder` and `dbm_pagfno` are not
+  provided.
 - `hsearch` is a value type (`hsearch.Table`) instead of one global table.
