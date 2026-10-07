@@ -691,7 +691,8 @@ func (t *DB) put(key, data []byte, flag db.Flag) error {
 
 	var h page
 	var index int
-	if flag == db.RCursor {
+	switch flag {
+	case db.RCursor:
 		var err error
 		if h, err = t.get(t.cursor.pg.pgno); err != nil {
 			return err
@@ -700,7 +701,7 @@ func (t *DB) put(key, data []byte, flag db.Flag) error {
 		if err := t.dleaf(skey, h, index); err != nil {
 			return err
 		}
-	} else {
+	default:
 		// Find the key to delete, or, the location at which to insert.
 		var e *epg
 		var exact bool
@@ -786,7 +787,8 @@ func (t *DB) fast(skey, key, data []byte) (*epg, bool) {
 
 	// On error miss, search reports it.
 	var cmp int
-	if t.order == orderForward {
+	switch t.order {
+	case orderForward:
 		if h.nextpg() != pInvalid || t.cur.index != h.nextIndex()-1 {
 			t.order = orderNot
 			return nil, false
@@ -799,7 +801,7 @@ func (t *DB) fast(skey, key, data []byte) (*epg, bool) {
 			t.cur.index++
 		}
 		t.last.index = t.cur.index
-	} else {
+	default:
 		if h.prevpg() != pInvalid || t.cur.index != 0 {
 			t.order = orderNot
 			return nil, false

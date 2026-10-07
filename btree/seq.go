@@ -90,7 +90,8 @@ func (t *DB) seqadv(flag db.Flag) (epg, error) {
 		return epg{}, err
 	}
 	index := c.pg.index
-	if flag == db.RNext {
+	switch flag {
+	case db.RNext:
 		// The cursor was deleted in duplicate records, and moved
 		// forward to a record that has yet to be returned.
 		if c.flags&cursAfter != 0 {
@@ -107,7 +108,7 @@ func (t *DB) seqadv(flag db.Flag) (epg, error) {
 			}
 			index = 0
 		}
-	} else {
+	default:
 		if c.flags&cursBefore != 0 {
 			c.flags &^= cursAfter | cursBefore
 			return epg{page: h, index: index}, nil

@@ -437,9 +437,10 @@ func (t *tree) search(nrec uint32, op int) (*epg, error) {
 				return nil, err
 			}
 			r := h.rinternal(p.index)
-			if op == sInsert {
+			switch op {
+			case sInsert:
 				r.nrecs++
-			} else {
+			default:
 				r.nrecs--
 			}
 			h.setRinternal(p.index, r.nrecs, r.pgno)
@@ -562,10 +563,11 @@ func (r *DB) Sync(flag db.Flag) error {
 // sync implements Sync; the caller must hold the tree write lock.
 func (r *DB) sync(flag db.Flag) error {
 	t := r.t
-	if flag == db.RRecnoSync {
+	switch flag {
+	case 0:
+	case db.RRecnoSync:
 		return t.sync()
-	}
-	if flag != 0 {
+	default:
 		return db.ErrInvalid
 	}
 	if err := r.syncFile(); err != nil {
