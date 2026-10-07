@@ -31,12 +31,12 @@ const (
 	defDirSize     = 256
 	defFFactor     = 65536
 	minFFactor     = 4
-	charKey        = "%$sniglet^&\x00" // sizeof includes NUL
+	charKey        = "%$sniglet^&\x00" // hashed with its NUL to fingerprint the hash function
 	byteShift      = 3
 	intByteShift   = 5
 	allSet         = 0xffffffff
 	bitsPerMap     = 32
-	nCached        = 32 // number of bit maps and spare points
+	nCached        = 32 // slots in Spares and Bitmaps
 	splitShift     = 11
 	splitMask      = 0x7ff
 	hdrSize        = 260
@@ -56,27 +56,27 @@ const (
 	ovflSize    = 2 * 2
 )
 
-// header is disk resident portion of hash table, always big endian.
+// header is the table metadata at the start of the file, always big endian.
 type header struct {
-	Magic     int32           // magic no for hash tables
-	Version   int32           // version id
-	ByteOrder uint32          // byte order
-	BSize     int32           // bucket/page size
-	BShift    int32           // bucket shift
-	DSize     int32           // directory size
-	SSize     int32           // segment size
-	SShift    int32           // segment shift
-	OvflPoint int32           // where overflow pages are being allocated
-	LastFreed int32           // last overflow page freed
-	MaxBucket int32           // id of maximum bucket in use
-	HighMask  int32           // mask to modulo into entire table
-	LowMask   int32           // mask to modulo into lower half of table
-	FFactor   int32           // fill factor
-	NKeys     int32           // number of keys in hash table
-	HdrPages  int32           // size of table header
-	HCharkey  int32           // value of hash(charKey)
-	Spares    [nCached]int32  // spare pages for overflow
-	Bitmaps   [nCached]uint16 // address of overflow page bitmaps
+	Magic     int32           // identifies a hash file
+	Version   int32           // file format version
+	ByteOrder uint32          // byte order of page contents
+	BSize     int32           // page size in bytes
+	BShift    int32           // log2 of BSize
+	DSize     int32           // directory size in segments
+	SSize     int32           // buckets per segment
+	SShift    int32           // log2 of SSize
+	OvflPoint int32           // split point new overflow pages come from
+	LastFreed int32           // overflow bit where the free page search starts
+	MaxBucket int32           // highest bucket number in use
+	HighMask  int32           // bucket mask for the whole table
+	LowMask   int32           // bucket mask for the lower half
+	FFactor   int32           // target keys per bucket
+	NKeys     int32           // number of stored keys
+	HdrPages  int32           // pages taken by the header
+	HCharkey  int32           // hash of charKey, detects a different hash function
+	Spares    [nCached]int32  // overflow pages allocated up to each split point
+	Bitmaps   [nCached]uint16 // overflow addresses of the bitmap pages
 }
 
 // Info holds options for New.  Zero fields and a nil Info select defaults.
@@ -100,9 +100,9 @@ func bufKey(addr int, bucket bool) int {
 
 // buf is a cached bucket or overflow page.
 type buf struct {
-	addr   int    // address of this page
-	page   []byte // actual page data
-	mod    bool   // modified
+	addr   int    // bucket number or overflow address
+	page   []byte // page contents
+	mod    bool   // dirty, must be written back
 	bucket bool   // bucket page, overflow page otherwise
 }
 
@@ -115,16 +115,16 @@ type DB struct {
 	hdr  header
 	hash func() hash.Hash32
 
-	nsegs    int // number of allocated segments
+	nsegs    int // segments in use
 	mapp     [nCached][]byte
-	nmaps    int // initial number of bitmaps
+	nmaps    int // bitmap pages in the file
 	modified bool
 	readOnly bool
 
 	mu    sync.RWMutex         // Get reads, everything else writes
 	cache lru.Cache[int, *buf] // trimmed between operations, callers hold buffers during one
 
-	// sequential scan cursor
+	// Seq position: page, bucket and entry index.
 	cpage   *buf
 	cbucket int
 	cndx    int
@@ -200,8 +200,7 @@ func New(file *os.File, info *Info) (*DB, error) {
 	default:
 		return nil, fmt.Errorf("%w: byte order %d", db.ErrFormat, hdr.ByteOrder)
 	}
-	// Max_Bucket is the maximum bucket number, so the number of buckets
-	// is max_bucket + 1.
+	// Segments covering buckets 0..MaxBucket, rounded up.
 	h.nsegs = int((hdr.MaxBucket + 1 + hdr.SSize - 1) / hdr.SSize)
 	h.nmaps = int((hdr.Spares[hdr.OvflPoint] + hdr.BSize<<byteShift - 1) >> (hdr.BShift + byteShift))
 	return h, nil
@@ -222,7 +221,7 @@ func (h *DB) initHash(info *Info) error {
 	h.o = binary.NativeEndian
 	if info != nil {
 		if info.BucketSize != 0 {
-			// Round pagesize up to power of 2
+			// log2 rounds up, giving the next power of two.
 			hdr.BShift = int32(log2(uint32(info.BucketSize)))
 			hdr.BSize = 1 << hdr.BShift
 			if hdr.BSize > maxBSize {
@@ -253,9 +252,8 @@ func (h *DB) initHash(info *Info) error {
 // spares and segment count and allocates the first overflow bitmap.
 func (h *DB) initHtab(nelem int) error {
 	hdr := &h.hdr
-	// Divide number of elements by the fill factor and determine a
-	// desired number of buckets.  Allocate space for the next greater
-	// power of two number of buckets.
+	// Enough buckets for nelem at the fill factor, rounded up to a power
+	// of two.
 	nelem = (nelem-1)/int(hdr.FFactor) + 1
 	l2 := int32(log2(uint32(max(nelem, 2))))
 	nbuckets := int32(1) << l2
@@ -265,7 +263,7 @@ func (h *DB) initHtab(nelem int) error {
 	hdr.OvflPoint = l2
 	hdr.LastFreed = 2
 
-	// First bitmap page is at: splitpoint l2 page offset 1
+	// The first bitmap takes the first overflow page of split point l2.
 	h.ibitmap(oaddrOf(int(l2), 1), int(l2)+1, 0)
 
 	hdr.MaxBucket = nbuckets - 1
@@ -400,7 +398,7 @@ func (h *DB) getPage(p []byte, addr int, bucket, disk, bitmap bool) error {
 	switch {
 	case n == len(p):
 	case n == 0 && err == io.EOF:
-		// We hit the EOF, so initialize a new page
+		// Past the end of file: the page was never written.
 		h.page(p).set(0, 0)
 	case err != nil:
 		return err
@@ -563,7 +561,6 @@ func (h *DB) access(action int, key, val []byte) ([]byte, error) {
 	for ndx < n {
 		switch {
 		case bp.at(ndx+1) >= realKey:
-			// Real key/data pair
 			if len(key) == off-bp.at(ndx) && bytes.Equal(key, rbufp.page[bp.at(ndx):off]) {
 				found = true
 			} else {
@@ -728,29 +725,27 @@ func (h *DB) expandTable() error {
 	newBucket := int(hdr.MaxBucket)
 	oldBucket := int(hdr.MaxBucket & hdr.LowMask)
 
-	// Check if we need a new segment
+	// A bucket past the last segment needs a new one, doubling the
+	// directory when full.
 	if newSegnum := newBucket >> hdr.SShift; newSegnum >= h.nsegs {
-		// Check if we need to expand directory
 		if newSegnum >= int(hdr.DSize) {
 			hdr.DSize <<= 1
 		}
 		h.nsegs++
 	}
 
-	// If the split point is increasing (MAX_BUCKET's log base 2
-	// increases), we need to copy the current contents of the spare
-	// split bucket to the next bucket.
+	// Entering a new split point: spares are cumulative, so it starts
+	// with the count of the previous one.
 	if spareNdx := int32(log2(uint32(hdr.MaxBucket + 1))); spareNdx > hdr.OvflPoint {
 		hdr.Spares[spareNdx] = hdr.Spares[hdr.OvflPoint]
 		hdr.OvflPoint = spareNdx
 	}
 
 	if newBucket > int(hdr.HighMask) {
-		// Starting a new doubling
+		// The table doubled, widen the masks.
 		hdr.LowMask = hdr.HighMask
 		hdr.HighMask = int32(newBucket) | hdr.LowMask
 	}
 
-	// Relocate records to the new bucket
 	return h.splitPage(oldBucket, newBucket)
 }

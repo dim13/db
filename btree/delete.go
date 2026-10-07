@@ -15,7 +15,7 @@ func (t *DB) Del(key []byte, flag db.Flag) (err error) {
 	case db.RNone:
 		err = t.bdelete(key)
 	case db.RCursor:
-		// Must already have started a scan and not have already deleted it.
+		// The cursor must sit on a live record.
 		c := &t.cursor
 		if c.flags.IsClr(cursInit) {
 			return db.ErrInvalid
@@ -27,8 +27,7 @@ func (t *DB) Del(key []byte, flag db.Flag) (err error) {
 		if err != nil {
 			return err
 		}
-		// If the page is about to be emptied, we'll need to
-		// delete it, which means we have to acquire a stack.
+		// Emptying the page frees it, which needs the parent stack.
 		if h.nextIndex() == 1 {
 			if h, err = t.stkacq(c.key, c.pg.pgno); err != nil {
 				return err
@@ -52,9 +51,9 @@ func (t *DB) Del(key []byte, flag db.Flag) (err error) {
 	return err
 }
 
-// stkacq acquires a stack for page pgno holding key, so we can delete it.
+// stkacq rebuilds the parent stack so that it leads to leaf pgno, which
+// holds key, and returns that page.
 func (t *DB) stkacq(key []byte, pgno uint32) (page, error) {
-	// Find the first occurrence of the key in the tree.
 	// Start from the leaf the stack leads to, search may have stepped
 	// to a sibling.
 	if _, _, err := t.search(key); err != nil {
@@ -65,10 +64,8 @@ func (t *DB) stkacq(key []byte, pgno uint32) (page, error) {
 		return page{}, err
 	}
 
-	// Move right, looking for the page.  At each move we have to move
-	// up the stack until we don't have to move to the next page.  If
-	// we have to change pages at an internal level, we have to fix the
-	// stack back up.
+	// Walk right towards pgno, keeping the stack in step: pop to the
+	// first parent with a next entry, then descend its leftmost path.
 	for h.pgno() != pgno {
 		nextpg := h.nextpg()
 		if nextpg == pInvalid {
@@ -106,7 +103,7 @@ func (t *DB) stkacq(key []byte, pgno uint32) (page, error) {
 		return t.get(pgno)
 	}
 
-	// Reacquire the original stack.
+	// Not found to the right; search again and walk left.
 	if _, _, err = t.search(key); err != nil {
 		return page{}, err
 	}
@@ -114,7 +111,6 @@ func (t *DB) stkacq(key []byte, pgno uint32) (page, error) {
 		return page{}, err
 	}
 
-	// Move left, looking for the page.
 	for h.pgno() != pgno {
 		prevpg := h.prevpg()
 		if prevpg == pInvalid {
@@ -151,11 +147,10 @@ func (t *DB) stkacq(key []byte, pgno uint32) (page, error) {
 	return t.get(pgno)
 }
 
-// bdelete deletes all key/data pairs matching the specified key.
+// bdelete removes every record with key.
 func (t *DB) bdelete(key []byte) error {
 	var deleted bool
 	for {
-		// Find any matching record.
 		e, exact, err := t.search(key)
 		if err != nil {
 			if deleted {
@@ -170,9 +165,9 @@ func (t *DB) bdelete(key []byte) error {
 			return db.ErrNotFound
 		}
 
-		// Delete forward, then delete backward, from the found key.  If
-		// there are duplicates and we reach either side of the page, do
-		// the key search again, so that we get them all.
+		// Remove the match and the duplicates after it, then those
+		// before it. Duplicates reaching a page edge may continue on a
+		// sibling, so search again in that case.
 		var redo bool
 		h := e.page
 		for {
@@ -197,12 +192,10 @@ func (t *DB) bdelete(key []byte) error {
 			}
 		}
 
-		// Check for right-hand edge of the page.
 		if e.index == h.nextIndex() {
 			redo = true
 		}
 
-		// Delete from the key to the beginning of the page.
 		for e.index > 0 {
 			e.index--
 			if eq, err := t.equal(key, *e); err != nil {
@@ -218,7 +211,6 @@ func (t *DB) bdelete(key []byte) error {
 			}
 		}
 
-		// Check for an empty page.
 		if h.nextIndex() == 0 {
 			if err := t.pdeleteKey(key, h); err != nil {
 				return err
@@ -243,14 +235,11 @@ func (t *DB) pdeleteKey(key []byte, h page) error {
 	return t.pdelete(h)
 }
 
-// pdelete deletes a single page from the tree.
+// pdelete frees empty leaf h and removes its entry from the parents
+// recorded on the stack.
 func (t *DB) pdelete(h page) error {
-	// Walk the parent page stack.  We've just deleted a page, so we
-	// have to delete the key from the parent page.  If the delete from
-	// the parent page makes it empty, this process may continue all
-	// the way up the tree.  We stop if we reach the root page (which
-	// is never deleted, it's just not worth the effort) or if the
-	// delete does not empty the page.
+	// Ancestors that become empty are freed in turn, up to the root,
+	// which is kept for simplicity.
 	for {
 		parent, ok := t.pop()
 		if !ok {
@@ -263,16 +252,14 @@ func (t *DB) pdelete(h page) error {
 		index := parent.index
 		bi := pg.binternal(index)
 
-		// Free any overflow pages.
 		if bi.flags&pBigKey != 0 {
 			if err := t.ovflDelete(bi.bytes); err != nil {
 				return err
 			}
 		}
 
-		// Free the parent if it has only the one key and it's not the
-		// root page.  If it's the root page, turn it back into an
-		// empty leaf page.
+		// A parent losing its last entry is freed, unless it is the
+		// root, which reverts to an empty leaf.
 		if pg.nextIndex() == 1 {
 			if pg.pgno() != pRoot {
 				if err := t.relink(pg); err != nil {
@@ -291,7 +278,6 @@ func (t *DB) pdelete(h page) error {
 		break
 	}
 
-	// Free the leaf page, as long as it wasn't the root.
 	if h.pgno() == pRoot {
 		t.dirty(h)
 		return nil
@@ -303,10 +289,11 @@ func (t *DB) pdelete(h page) error {
 	return nil
 }
 
-// dleaf deletes a single record from a leaf page.
+// dleaf removes record index from leaf h, releasing its overflow pages
+// and keeping the cursor consistent.
 func (t *DB) dleaf(key []byte, h page, index int) error {
 	c := &t.cursor
-	// If this record is referenced by the cursor, delete the cursor.
+	// The cursor's record is going away; reposition or detach it first.
 	if c.flags.IsSet(cursInit) && c.flags.IsClr(cursAcquire) &&
 		c.pg.pgno == h.pgno() && c.pg.index == index {
 		if err := t.curdel(key, h, index); err != nil {
@@ -314,7 +301,6 @@ func (t *DB) dleaf(key []byte, h page, index int) error {
 		}
 	}
 
-	// If the entry uses overflow pages, make them available for reuse.
 	bl := h.bleaf(index)
 	if bl.flags&pBigKey != 0 {
 		if err := t.ovflDelete(bl.key); err != nil {
@@ -328,7 +314,7 @@ func (t *DB) dleaf(key []byte, h page, index int) error {
 	}
 	h.removeItem(index, nbleafdbt(bl.ksize, bl.dsize))
 
-	// If the cursor is on this page, adjust it as necessary.
+	// Records after index have shifted down by one.
 	if c.flags.IsSet(cursInit) && c.flags.IsClr(cursAcquire) &&
 		c.pg.pgno == h.pgno() && c.pg.index > index {
 		c.pg.index--
@@ -336,18 +322,16 @@ func (t *DB) dleaf(key []byte, h page, index int) error {
 	return nil
 }
 
-// curdel deletes the cursor.
+// curdel is called before the cursor's record is removed. It moves the
+// cursor to an adjacent duplicate if there is one, otherwise it saves
+// the key so the next cursor operation can find its place.
 func (t *DB) curdel(key []byte, h page, index int) error {
-	// If there are duplicates, move forward or backward to one.
-	// Otherwise, copy the key into the cursor area.
 	c := &t.cursor
 	c.flags.Clr(cursAfter | cursBefore | cursAcquire)
 
 	var curcopy bool
 	if t.flags.IsClr(bNoDups) {
-		// We're going to have to do comparisons.  If we weren't
-		// provided a copy of the key, i.e. the user is deleting
-		// the current cursor position, get one.
+		// Comparing needs the key, which a cursor delete doesn't pass.
 		if key == nil {
 			k, _, err := t.ret(epg{page: h, index: index}, true, false)
 			if err != nil {
@@ -410,7 +394,7 @@ func (t *DB) curdel(key []byte, h page, index int) error {
 	return nil
 }
 
-// relink links around a deleted page.
+// relink unlinks h from its siblings.
 func (t *DB) relink(h page) error {
 	if h.nextpg() != pInvalid {
 		pg, err := t.get(h.nextpg())

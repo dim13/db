@@ -9,8 +9,7 @@ func (t *DB) Seq(key []byte, flag db.Flag) (rkey, data []byte, err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	defer t.done(&err)
-	// If scan uninitialized as yet, or starting at a specific record, set
-	// the scan to a specific key.
+	// RNext and RPrev start a new scan if none is active.
 	var e epg
 	switch flag {
 	case db.RNext, db.RPrev:
@@ -31,18 +30,16 @@ func (t *DB) Seq(key []byte, flag db.Flag) (rkey, data []byte, err error) {
 	return t.ret(e, true, true)
 }
 
-// seqset sets the sequential scan to a specific key.
+// seqset starts a scan at key for RCursor, otherwise at either end.
 func (t *DB) seqset(key []byte, flag db.Flag) (epg, error) {
 	switch flag {
 	case db.RCursor:
-		// Find the first instance of the key or the smallest key
-		// which is greater than or equal to the specified key.
 		if len(key) == 0 {
 			return epg{}, db.ErrInvalid
 		}
 		return t.first(key)
 	case db.RFirst, db.RNext:
-		// Walk down the left-hand side of the tree.
+		// Follow the leftmost children down to the first leaf.
 		for pg := uint32(pRoot); ; {
 			h, err := t.get(pg)
 			if err != nil {
@@ -57,7 +54,7 @@ func (t *DB) seqset(key []byte, flag db.Flag) (epg, error) {
 			pg = h.binternal(0).pgno
 		}
 	default: // db.RLast, db.RPrev
-		// Walk down the right-hand side of the tree.
+		// Follow the rightmost children down to the last leaf.
 		for pg := uint32(pRoot); ; {
 			h, err := t.get(pg)
 			if err != nil {
@@ -74,13 +71,12 @@ func (t *DB) seqset(key []byte, flag db.Flag) (epg, error) {
 	}
 }
 
-// seqadv advances the sequential scan.
+// seqadv moves the scan one record forward or backward.
 func (t *DB) seqadv(flag db.Flag) (epg, error) {
 	c := &t.cursor
 
-	// The cursor was deleted where there weren't any duplicate records,
-	// so the key was saved.  Find out where that key would go in the
-	// current tree.
+	// The cursor's record was deleted with no duplicate to move to;
+	// resume where its saved key would sit now.
 	if c.flags.IsSet(cursAcquire) {
 		return t.first(c.key)
 	}
@@ -92,8 +88,7 @@ func (t *DB) seqadv(flag db.Flag) (epg, error) {
 	index := c.pg.index
 	switch flag {
 	case db.RNext:
-		// The cursor was deleted in duplicate records, and moved
-		// forward to a record that has yet to be returned.
+		// A delete already moved the cursor onto the next duplicate.
 		if c.flags.IsSet(cursAfter) {
 			c.flags.Clr(cursAfter | cursBefore)
 			return epg{page: h, index: index}, nil
@@ -129,7 +124,8 @@ func (t *DB) seqadv(flag db.Flag) (epg, error) {
 	return epg{page: h, index: index}, nil
 }
 
-// first finds the first entry greater than or equal to key.
+// first returns the lowest record with a key not less than key, the
+// first one among duplicates.
 func (t *DB) first(key []byte) (epg, error) {
 	ep, exact, err := t.search(key)
 	if err != nil {
@@ -139,9 +135,7 @@ func (t *DB) first(key []byte) (epg, error) {
 		if t.flags.IsSet(bNoDups) {
 			return *ep, nil
 		}
-		// Walk backwards, as long as the entry matches and there are
-		// keys left in the tree.  Save a copy of each match in case
-		// we go too far.
+		// search may hit any of the duplicates; step back to the first.
 		e := *ep
 		var save epg
 		for {
@@ -166,7 +160,8 @@ func (t *DB) first(key []byte) (epg, error) {
 		return save, nil
 	}
 
-	// If at the end of a page, find the next entry.
+	// An insertion point past the last item means the next key is on
+	// the right sibling.
 	e := *ep
 	if e.index == e.page.nextIndex() {
 		pg := e.page.nextpg()
@@ -182,7 +177,7 @@ func (t *DB) first(key []byte) (epg, error) {
 	return e, nil
 }
 
-// setcur sets the cursor to an entry in the tree.
+// setcur points the cursor at record index of page pgno.
 func (t *DB) setcur(pgno uint32, index int) {
 	t.cursor.key = nil
 	t.cursor.flags.Clr(cursAcquire | cursAfter | cursBefore)

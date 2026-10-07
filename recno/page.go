@@ -12,32 +12,32 @@ import (
 )
 
 const (
-	pInvalid = 0 // invalid tree page number
-	pMeta    = 0 // tree metadata page number
-	pRoot    = 1 // tree root page number
+	pInvalid = 0 // no page
+	pMeta    = 0 // metadata page
+	pRoot    = 1 // root page
 )
 
 // Page types
 const (
-	pBInternal = 1 << iota // btree internal page
-	pBLeaf                 // leaf page
-	pOverflow              // overflow page
-	pRInternal             // recno internal page
-	pRLeaf                 // leaf page
-	pPreserve              // never delete this chain of pages
+	pBInternal = 1 << iota // btree internal
+	pBLeaf                 // btree leaf, only a fresh root
+	pOverflow              // part of an overflow chain
+	pRInternal             // record counts and child pages
+	pRLeaf                 // records
+	pPreserve              // chain still referenced, keep it
 
-	pType = pPreserve - 1 // type mask
+	pType = pPreserve - 1 // mask of the type bits
 )
 
 // Item flags
 const (
-	pBigData = 0x01 // overflow data
+	pBigData = 0x01 // data is an overflow reference
 )
 
 const (
-	dataOff    = 20 // BTDATAOFF: size of page header
+	dataOff    = 20 // page header size
 	novflSize  = 8  // size of {pgno, size} overflow reference
-	nrInternal = 8  // size of RINTERNAL item
+	nrInternal = 8  // size of a recno internal item
 )
 
 // lalign rounds n up to a multiple of 4.

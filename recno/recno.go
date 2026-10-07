@@ -21,9 +21,9 @@ type Flag uint
 
 // Info flags
 const (
-	RFixedLen Flag = 1 << iota // fixed-length records
-	RNoKey                     // key not required
-	RSnapshot                  // snapshot the input
+	RFixedLen Flag = 1 << iota // records of Info.RecordLen bytes
+	RNoKey                     // accepted, has no effect
+	RSnapshot                  // read the whole file in New
 )
 
 // search operations
@@ -111,7 +111,7 @@ func New(file *os.File, info *Info) (*DB, error) {
 		}
 	}
 
-	// If the root page was created, reset the flags.
+	// A new root starts as a btree leaf; retype it for records.
 	h, err := t.get(pRoot)
 	if err != nil {
 		return nil, err
@@ -218,8 +218,7 @@ func (r *DB) Put(key, data []byte, flag db.Flag) (rkey []byte, err error) {
 		return nil, db.ErrReadOnly
 	}
 
-	// If using fixed-length records, and the record is long, return
-	// ErrInvalid.  If it's short, pad it out.
+	// Fixed-length records are padded with bval; longer ones are rejected.
 	if t.flags.IsSet(rFixLen) && len(data) != t.reclen {
 		if len(data) > t.reclen {
 			return nil, db.ErrInvalid
@@ -262,8 +261,7 @@ func (r *DB) Put(key, data []byte, flag db.Flag) (rkey []byte, err error) {
 		return nil, db.ErrInvalid
 	}
 
-	// Make sure that records up to and including the put record are
-	// already in the database.  If skipping records, create empty ones.
+	// Load source records up to nrec, then fill any gap with empty ones.
 	if nrec > t.nrecs {
 		if t.flags.IsClr(rEOF | rInMem) {
 			if err := t.irec(nrec); err != nil && err != db.ErrNotFound {
@@ -298,9 +296,10 @@ func (r *DB) Put(key, data []byte, flag db.Flag) (rkey []byte, err error) {
 	return binary.NativeEndian.AppendUint32(nil, nrec), nil
 }
 
-// iput adds a recno item to the tree.
+// iput stores data at 0-based position nrec as flag directs, splitting
+// the leaf if it is full.
 func (t *tree) iput(nrec uint32, data []byte, flag db.Flag) error {
-	// If the data won't fit on a page, store it on indirect pages.
+	// Large records live in an overflow chain; the leaf keeps a reference.
 	var dflags byte
 	if len(data) > t.ovflsize {
 		var err error
@@ -320,8 +319,8 @@ func (t *tree) iput(nrec uint32, data []byte, flag db.Flag) error {
 	}
 	h, index := e.page, e.index
 
-	// Add the specified key/data pair to the tree.  The RIAfter and
-	// RIBefore flags insert the key after/before the specified key.
+	// RIAfter and RIBefore insert next to nrec; otherwise an existing
+	// record is replaced.
 	switch flag {
 	case db.RIAfter:
 		index++
@@ -334,7 +333,7 @@ func (t *tree) iput(nrec uint32, data []byte, flag db.Flag) error {
 		}
 	}
 
-	// If not enough room, split the page.
+	// The item also needs a 2-byte index slot.
 	t.flags.Set(bModified)
 	nbytes := nrleafdbt(len(data))
 	if h.upper()-h.lower() < nbytes+2 {
@@ -393,7 +392,7 @@ func (r *DB) Del(key []byte, flag db.Flag) (err error) {
 	return err
 }
 
-// rdelete deletes the data matching the specified key.
+// rdelete removes 0-based record nrec, decrementing the parent counts.
 func (t *tree) rdelete(nrec uint32) error {
 	e, err := t.search(nrec, sDelete)
 	if err != nil {
@@ -406,11 +405,10 @@ func (t *tree) rdelete(nrec uint32) error {
 	return nil
 }
 
-// dleaf deletes a single record from a recno leaf page.
+// dleaf removes item index from leaf h and frees its overflow chain.
 func (t *tree) dleaf(h page, index int) error {
-	// Internal records are never deleted from internal pages, regardless
-	// of the records that caused them to be added being deleted.  Pages
-	// made empty by deletion are not reclaimed.
+	// Parent entries stay even when this empties the leaf; empty leaves
+	// are not freed.
 	rl := h.rleaf(index)
 	if rl.flags&pBigData != 0 {
 		if err := t.ovflDelete(rl.data); err != nil {
@@ -583,7 +581,7 @@ func (r *DB) syncFile() error {
 	if t.flags.IsSet(bRdOnly|rRdOnly|rInMem) || t.flags.IsClr(rModified) {
 		return nil
 	}
-	// Read any remaining records into the tree.
+	// The file is rewritten from the tree, so load unread records first.
 	if t.flags.IsClr(rEOF) {
 		if err := t.irec(math.MaxUint32); err != nil && err != db.ErrNotFound {
 			return err

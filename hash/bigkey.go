@@ -14,7 +14,7 @@ func (h *DB) bigInsert(bufp *buf, key, val []byte) error {
 	keyData, valData := key, val
 	var err error
 
-	// First move the Key
+	// The key first, a page at a time, then the data.
 	for space := p.freespace() - bigOverhead; len(keyData) > 0; space = p.freespace() - bigOverhead {
 		moveBytes := min(space, len(keyData))
 		off := p.offset() - moveBytes
@@ -34,7 +34,7 @@ func (h *DB) bigInsert(bufp *buf, key, val []byte) error {
 		n = p.at(0)
 		if len(keyData) == 0 {
 			// Unlike 1.85, if data would fill this page exactly, move
-			// it to the next page, FREESPACE 0 means data continues.
+			// it to the next page, zero free space means data continues.
 			moveBytes = min(p.freespace(), len(valData))
 			if p.freespace() != 0 && (moveBytes < p.freespace() || moveBytes < len(valData)) {
 				off = p.offset() - moveBytes
@@ -53,11 +53,10 @@ func (h *DB) bigInsert(bufp *buf, key, val []byte) error {
 		bufp.mod = true
 	}
 
-	// Now move the data
 	for space := p.freespace() - bigOverhead; len(valData) > 0; space = p.freespace() - bigOverhead {
 		moveBytes := min(space, len(valData))
-		// Here's the hack to make sure that if the data ends on the
-		// same page as the key ends, FREESPACE is at least one.
+		// Zero free space means the data continues, so data that
+		// would fill a page exactly must hold back a byte.
 		if space == len(valData) && len(valData) == len(val) {
 			moveBytes--
 		}
@@ -84,8 +83,8 @@ func (h *DB) bigInsert(bufp *buf, key, val []byte) error {
 	return nil
 }
 
-// bigDelete is called when bufp's page contains a partial key (index
-// should be 1).  All pages in the big key/data pair except bufp are freed.
+// bigDelete removes the big pair starting at index 1 of bufp.  Its other
+// pages are freed; bufp stays, as the previous page still links to it.
 func (h *DB) bigDelete(bufp *buf) error {
 	rbufp := bufp
 	var lastBfp *buf
@@ -96,9 +95,8 @@ func (h *DB) bigDelete(bufp *buf) error {
 		if bp.at(2) == fullKey || bp.at(2) == fullKeyData {
 			keyDone = true
 		}
-		// If there is freespace left on a FULL_KEY_DATA page, then
-		// the data is short and fits entirely on this page, and this
-		// is the last page.
+		// Free space left where the key ends means the data ends
+		// there too.
 		if bp.at(2) == fullKeyData && bp.freespace() != 0 {
 			break
 		}
@@ -115,15 +113,13 @@ func (h *DB) bigDelete(bufp *buf) error {
 		bp = h.page(rbufp.page)
 	}
 
-	// rbufp points to the last page of the big key/data pair.  Bufp
-	// points to the first one -- it should now be empty pointing to the
-	// next page after this pair.
+	// Empty the first page, keeping only a link to what followed the
+	// pair's last page, rbufp.
 	n := bp.at(0)
 	pageno := bp.at(n - 1)
 
 	bp = h.page(bufp.page)
 	if n > 2 {
-		// There is an overflow page.
 		bp.set(1, pageno)
 		bp.set(2, ovflPage)
 	}
@@ -170,16 +166,15 @@ func (h *DB) findBigpair(bufp *buf, ndx int, key []byte) (int, bool, error) {
 	return ndx, true, nil
 }
 
-// findLastPage finds the last page of the big pair starting at bufp, and
-// returns page number of the overflow page following it, 0 if none.
+// findLastPage returns the address of the page chained after the big pair
+// starting at bufp, 0 if none, and the pair's last page.
 func (h *DB) findLastPage(bufp *buf) (int, *buf, error) {
 	bp := h.page(bufp.page)
 	var err error
 	for {
 		n := bp.at(0)
-		// This is the last page if: the tag is FULL_KEY_DATA and
-		// either only 2 entries OVFLPAGE marker is explicit there
-		// is freespace on the page.
+		// The pair ends on a key/data page with no further entries,
+		// an explicit overflow link, or free space.
 		if bp.at(2) == fullKeyData && (n == 2 || bp.at(n) == ovflPage || bp.freespace() != 0) {
 			break
 		}
@@ -199,7 +194,7 @@ func (h *DB) setCursor(bufp *buf) error {
 	bp := h.page(bufp.page)
 	h.cndx = 1
 	if bp.at(0) == 2 {
-		// No more buckets in chain
+		// The pair ended the bucket's chain.
 		h.cpage = nil
 		h.cbucket++
 		return nil
@@ -215,8 +210,8 @@ func (h *DB) setCursor(bufp *buf) error {
 	return nil
 }
 
-// bigReturn returns the data for the key/data pair that begins on this
-// page at this index (index should always be 1).
+// bigReturn returns the data of the big pair at ndx (always 1) of bufp,
+// moving the scan cursor past it if setCurrent.
 func (h *DB) bigReturn(bufp *buf, ndx int, setCurrent bool) ([]byte, error) {
 	bp := h.page(bufp.page)
 	var err error
@@ -235,17 +230,13 @@ func (h *DB) bigReturn(bufp *buf, ndx int, setCurrent bool) ([]byte, error) {
 			return nil, err
 		}
 	case bp.freespace() == 0:
-		// We can't distinguish between FULL_KEY_DATA that contains
-		// complete data or incomplete data, so we require that if
-		// the data is complete, there is at least 1 byte of free
-		// space left.
+		// No free space: the data continues, see bigInsert.
 		off := bp.at(bp.at(0))
 		head = bp.b[off:bp.at(1)]
 		if bufp, err = h.next(bufp); err != nil {
 			return nil, err
 		}
 	default:
-		// The data is all on one page.
 		off := bp.at(bp.at(0))
 		val := bytes.Clone(bp.b[off:bp.at(1)])
 		if setCurrent {
@@ -270,7 +261,6 @@ func (h *DB) collectData(bufp *buf, set bool) ([]byte, error) {
 		bp := h.page(bufp.page)
 		data = append(data, bp.b[bp.at(1):h.hdr.BSize]...)
 		if bp.at(2) == fullKeyData {
-			// End of Data
 			if set {
 				if err := h.setCursor(bufp); err != nil {
 					return nil, err
@@ -292,7 +282,6 @@ func (h *DB) bigKeydata(bufp *buf, set bool) ([]byte, []byte, error) {
 		bp := h.page(bufp.page)
 		key = append(key, bp.b[bp.at(1):h.hdr.BSize]...)
 		if bp.at(2) == fullKey || bp.at(2) == fullKeyData {
-			// End of Key
 			val, err := h.bigReturn(bufp, 1, set)
 			if err != nil {
 				return nil, nil, err
@@ -316,7 +305,6 @@ func (h *DB) bigSplit(op, np, bigKeyp *buf, obucket int) (splitReturn, error) {
 	var ret splitReturn
 	bp := bigKeyp
 
-	// Now figure out where the big key/data goes
 	key, _, err := h.bigKeydata(bigKeyp, false)
 	if err != nil {
 		return ret, err
@@ -334,7 +322,7 @@ func (h *DB) bigSplit(op, np, bigKeyp *buf, obucket int) (splitReturn, error) {
 		}
 	}
 
-	// Now make one of np/op point to the big key/data pair
+	// Link the pair's first page from the bucket it hashes to.
 	tmpp := op
 	if change {
 		tmpp = np
@@ -350,20 +338,16 @@ func (h *DB) bigSplit(op, np, bigKeyp *buf, obucket int) (splitReturn, error) {
 	tp.setOffset(off)
 	tp.setFreespace(freeSpace - ovflSize)
 
-	// Finally, set the new and old return values.  BIG_KEYP contains a
-	// pointer to the last page of the big key_data pair.  Make sure that
-	// big_keyp has no following page (2 elements) or create an empty
-	// following page.
+	// That bucket continues after the pair, so its last page must end
+	// in an empty overflow page.
 	ret.newp, ret.oldp = np, op
 
 	tp = h.page(bigKeyp.page)
 	bigKeyp.mod = true
 	if tp.at(0) > 2 {
-		// There may be either one or two offsets on this page.  If
-		// there is one, then the overflow page is linked on normally
-		// and tp[4] is OVFLPAGE.  If there are two, tp[4] contains
-		// the second offset and needs to get stuffed in after the
-		// next overflow page is added.
+		// Replace the old link.  Slot 4 holds the link marker or,
+		// when data shares the page, its offset; addOvflpage
+		// overwrites it, so restore it.
 		n := tp.at(4)
 		freeSpace := tp.freespace()
 		off := tp.offset()

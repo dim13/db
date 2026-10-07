@@ -6,25 +6,12 @@ import (
 	"github.com/dim13/db"
 )
 
-/*
- * routines dealing with a data page
- *
- * page format:
- *	┌───┬────────┬────────┬────────┐
- * p	│ n │ keyoff │ datoff │ keyoff │
- * 	├───┴────┬───┴───┬────┴──┬─────┤
- *	│ datoff │ free  │  ptr  │ ──> │
- *	├────────┴───────┴───────┴─────┤
- *	│	 F R E E A R E A       │
- *	├──────────────┬───────────────┤
- *	│  <──── ─ ─ ─ │ data	       │
- *	├────────┬─────┴────┬──────────┤
- *	│  key   │ data     │ key      │
- *	└────────┴──────────┴──────────┘
- *
- * Pointer to the free space is always:  p[p[0] + 2]
- * Amount of free space on the page is:  p[p[0] + 1]
- */
+// A page is viewed as uint16 slots. Slot 0 holds the entry count n,
+// slots 1..n the entries in pairs: a regular pair stores the offsets of
+// its key and data, smaller values (below realKey) in the second slot tag
+// big pairs and overflow links. Slots n+1 and n+2 hold the free space and
+// the start of the data area, which grows from the end of the page down
+// toward the slots. See doc/hash.txt for the full format.
 
 // hpage is a view on a page as array of uint16.
 type hpage struct {
@@ -94,19 +81,17 @@ func (h *DB) pageInit(b []byte) {
 func (p hpage) putpair(key, val []byte) {
 	n := p.at(0)
 
-	// Enter the key first.
+	// Key above data, both just below the current data area.
 	off := p.offset() - len(key)
 	copy(p.b[off:], key)
 	n++
 	p.set(n, off)
 
-	// Now the data.
 	off -= len(val)
 	copy(p.b[off:], val)
 	n++
 	p.set(n, off)
 
-	// Adjust page info.
 	p.set(0, n)
 	p.set(n+1, off-(n+3)*2)
 	p.set(n+2, off)
@@ -127,10 +112,11 @@ func (h *DB) delpair(bufp *buf, ndx int) error {
 	pairlen := newoff - bp.at(ndx+1)
 
 	if ndx != n-1 {
-		// Hard Case -- need to shuffle keys
+		// Not the last pair: move the bytes below it up by pairlen.
 		src := bp.offset()
 		copy(bp.b[src+pairlen:], bp.b[src:bp.at(ndx+1)])
-		// Now adjust the pointers
+		// Shift later entries down two slots; overflow links hold page
+		// addresses, not offsets, so they are not adjusted.
 		for i := ndx + 2; i <= n; i += 2 {
 			if bp.at(i+1) == ovflPage {
 				bp.set(i-2, bp.at(i))
@@ -141,7 +127,7 @@ func (h *DB) delpair(bufp *buf, ndx int) error {
 			}
 		}
 	}
-	// Finally adjust the page data
+	// Move the free space and data start trailer down two slots.
 	bp.set(n, bp.at(n+2)+pairlen)
 	bp.set(n-1, bp.at(n+1)+pairlen+2*2)
 	bp.set(0, n-2)
@@ -176,7 +162,7 @@ func (h *DB) splitPage(obucket, nbucket int) error {
 		}
 		key := op[ino.at(n):off]
 		if h.callHash(key) == obucket {
-			// Don't switch page
+			// Stays: close any gap left by pairs moved out before it.
 			if diff := copyto - off; diff != 0 {
 				copyto = ino.at(n+1) + diff
 				copy(op[copyto:], op[ino.at(n+1):off])
@@ -187,22 +173,22 @@ func (h *DB) splitPage(obucket, nbucket int) error {
 			}
 			ndx += 2
 		} else {
-			// Switch page
+			// Rehashes to the new bucket.
 			np.putpair(key, op[ino.at(n+1):ino.at(n)])
 			moved += 2
 		}
 		off = ino.at(n + 1)
 	}
 
-	// Now clean up the page
 	ino.set(0, ino.at(0)-moved)
 	ino.setFreespace(copyto - 2*(ino.at(0)+3))
 	ino.setOffset(copyto)
 	return nil
 }
 
-// uglySplit is called when we encounter an overflow or big key/data page
-// during split handling.
+// uglySplit finishes splitPage once it meets an overflow link or big pair:
+// the remaining pairs are re-added one by one, chaining overflow pages as
+// they fill.
 func (h *DB) uglySplit(obucket int, oldp, newp *buf, copyto, moved int) error {
 	bsize := int(h.hdr.BSize)
 	bufp := oldp
@@ -229,8 +215,8 @@ func (h *DB) uglySplit(obucket int, oldp, newp *buf, copyto, moved int) error {
 			lastBfp = ret.nextp
 		} else if ino.at(n+1) == ovflPage {
 			ovAddr := ino.at(n)
-			// Fix up the old page -- the extra 2 are the fields
-			// which contained the overflow information.
+			// Truncate to the pairs kept, dropping the link too
+			// (the extra 2 slots).
 			ino.set(0, ino.at(0)-(moved+2))
 			ino.setFreespace(scopyto - 2*(ino.at(0)+3))
 			ino.setOffset(scopyto)
@@ -248,14 +234,12 @@ func (h *DB) uglySplit(obucket int, oldp, newp *buf, copyto, moved int) error {
 			}
 			lastBfp = bufp
 		}
-		// Move regular sized pairs of there are any
 		off := bsize
 		for n = 1; n < ino.at(0) && ino.at(n+1) >= realKey; n += 2 {
 			key := ino.b[ino.at(n):off]
 			val := ino.b[ino.at(n+1):ino.at(n)]
 			off = ino.at(n + 1)
 			if h.callHash(key) == obucket {
-				// Keep on old page
 				if !op.pairfits(key, val) {
 					if oldp, err = h.addOvflpage(oldp); err != nil {
 						return err
@@ -265,7 +249,6 @@ func (h *DB) uglySplit(obucket int, oldp, newp *buf, copyto, moved int) error {
 				op.putpair(key, val)
 				oldp.mod = true
 			} else {
-				// Move to new page
 				if !np.pairfits(key, val) {
 					if newp, err = h.addOvflpage(newp); err != nil {
 						return err
@@ -293,8 +276,8 @@ func (h *DB) addel(bufp *buf, key, val []byte) error {
 	var squeezed bool
 	for bp.at(0) != 0 && (bp.at(2) < realKey || bp.at(bp.at(0)) < realKey) {
 		if bp.at(2) == fullKeyData && bp.at(0) == 2 {
-			// This is the last page of a big key/data pair
-			// and we need to add another page
+			// Tail of a big pair with nothing after it: append a
+			// page.
 			break
 		} else if bp.at(2) < realKey && bp.at(bp.at(0)) != ovflPage {
 			if bufp, err = h.getBuf(bp.at(bp.at(0)-1), bufp, false); err != nil {
@@ -302,11 +285,11 @@ func (h *DB) addel(bufp *buf, key, val []byte) error {
 			}
 			bp = h.page(bufp.page)
 		} else if bp.at(bp.at(0)) != ovflPage {
-			// Short key/data pairs, no more pages (1.86)
+			// Last page of regular pairs (1.86).
 			break
 		} else if bp.at(2) >= realKey && bp.freespace() > pairsize(key, val) {
-			// Try to squeeze key on this page, but never on the tail
-			// of a big pair (1.86)
+			// Room left before the overflow link, but not on a big
+			// pair's tail (1.86).
 			h.squeezeKey(bp, key, val)
 			squeezed = true
 			break
@@ -335,8 +318,8 @@ func (h *DB) addel(bufp *buf, key, val []byte) error {
 	}
 	bufp.mod = true
 
-	// If the average number of keys per bucket exceeds the fill factor,
-	// expand the table.
+	// Grow when a bucket needed a new overflow page or the average
+	// bucket holds more keys than the fill factor.
 	h.hdr.NKeys++
 	if doExpand || h.hdr.NKeys/(h.hdr.MaxBucket+1) > h.hdr.FFactor {
 		return h.expandTable()
@@ -349,7 +332,8 @@ func (h *DB) addel(bufp *buf, key, val []byte) error {
 func (h *DB) addOvflpage(bufp *buf) (*buf, error) {
 	sp := h.page(bufp.page)
 
-	// Check if we are dynamically determining the fill factor
+	// A default fill factor is fixed on the first overflow at half the
+	// entries, i.e. the pairs that fit on this page.
 	if h.hdr.FFactor == defFFactor {
 		h.hdr.FFactor = max(int32(sp.at(0)>>1), minFFactor)
 	}
@@ -364,9 +348,7 @@ func (h *DB) addOvflpage(bufp *buf) (*buf, error) {
 	}
 	nb.mod = true
 
-	// Since a pair is allocated on a page only if there's room to add
-	// an overflow page, we know that the OVFL information will fit on
-	// the page.
+	// pairfits always reserved room for this link.
 	ndx := sp.at(0)
 	sp.set(ndx+4, sp.offset())
 	sp.set(ndx+3, sp.freespace()-ovflSize)
@@ -413,7 +395,8 @@ func (h *DB) clrbit(m []byte, n int) {
 	h.o.PutUint32(m[4*i:], h.word(m, i)&^(1<<(n%bitsPerMap)))
 }
 
-// ibitmap initializes a new bitmap page.
+// ibitmap creates bitmap ndx at overflow address pnum, with the first
+// nbits bits clear except bit 0, the bitmap page itself.
 func (h *DB) ibitmap(pnum, nbits, ndx int) {
 	ip := make([]byte, h.hdr.BSize)
 	h.nmaps++
@@ -470,7 +453,7 @@ func (h *DB) overflowPage() (int, error) {
 	freePage := (maxFree - 1) >> shift
 	freeBit := (maxFree - 1) & mask
 
-	// Look through all the free maps to find the first free block
+	// Scan the bitmaps for a clear bit, starting at the last freed one.
 	firstPage := int(hdr.LastFreed) >> shift
 	for i := firstPage; i <= freePage; i++ {
 		freep, err := h.bitmap(i)
@@ -491,13 +474,12 @@ func (h *DB) overflowPage() (int, error) {
 			if w := h.word(freep, j); w != allSet {
 				bit += firstFree(w)
 				h.setbit(freep, bit)
-				// Bits are addressed starting with 0, but
-				// overflow pages are addressed beginning at 1.
+				// Bits count from 0, overflow offsets from 1.
 				bit = 1 + bit + i*(mask+1)
 				if bit >= int(hdr.LastFreed) {
 					hdr.LastFreed = int32(bit - 1)
 				}
-				// Calculate the split number for this page
+				// Find the split point whose spares hold bit.
 				i = 0
 				for i < splitnum && bit > int(hdr.Spares[i]) {
 					i++
@@ -516,7 +498,7 @@ func (h *DB) overflowPage() (int, error) {
 		}
 	}
 
-	// No Free Page Found
+	// None free: take a new page at the end of the current split point.
 	hdr.LastFreed = hdr.Spares[splitnum]
 	hdr.Spares[splitnum]++
 	offset := int(hdr.Spares[splitnum])
@@ -533,14 +515,13 @@ func (h *DB) overflowPage() (int, error) {
 		offset = 1
 	}
 
-	// Check if we need to allocate a new bitmap page
+	// The last bitmap is full, start another.
 	if freeBit == mask {
 		if freePage++; freePage >= nCached {
 			return 0, db.ErrOverflow
 		}
-		// The bitmap is allocated with 1 clear bit: the first
-		// page is the map page itself, the second is the overflow
-		// page we were looking for.
+		// The new page holds the bitmap; the one after it is
+		// returned, so the bitmap starts with one bit clear.
 		h.ibitmap(oaddrOf(splitnum, offset), 1, freePage)
 		hdr.Spares[splitnum]++
 		offset++
@@ -554,8 +535,7 @@ func (h *DB) overflowPage() (int, error) {
 			offset = 0
 		}
 	} else {
-		// Free_bit addresses the last used bit.  Bump it to address
-		// the first available bit.
+		// Mark the bit after the last used one.
 		freep, err := h.bitmap(freePage)
 		if err != nil {
 			return 0, err
@@ -564,11 +544,10 @@ func (h *DB) overflowPage() (int, error) {
 		h.setbit(freep, freeBit)
 	}
 
-	// Calculate address of the new overflow page
 	return oaddrOf(splitnum, offset), nil
 }
 
-// freeOvflpage marks overflow page as free.
+// freeOvflpage clears the bitmap bit of obufp and drops it from the cache.
 func (h *DB) freeOvflpage(obufp *buf) error {
 	hdr := &h.hdr
 	addr := obufp.addr

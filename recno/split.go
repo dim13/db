@@ -1,11 +1,10 @@
 package recno
 
-// split splits page sp and inserts data with flags at index skip,
-// ilen is the insert length.
+// split makes room for an ilen-byte leaf item at index skip of the full
+// page sp, stores data there, and adds the new page to the parents,
+// splitting them in turn when full.
 func (t *tree) split(sp page, data []byte, flags byte, ilen, skip int) error {
-	// Split the page into two pages, l and r.  The split routines return
-	// the page into which the key should be inserted and with skip set
-	// to the offset which should be used.
+	// h is whichever of l and r got the open slot, skip its index there.
 	var h, l, r page
 	var err error
 	if sp.pgno() == pRoot {
@@ -16,21 +15,17 @@ func (t *tree) split(sp page, data []byte, flags byte, ilen, skip int) error {
 		return err
 	}
 
-	// Insert the new key/data pair into the leaf page.
 	h.setUpper(h.upper() - ilen)
 	h.setLinp(skip, h.upper())
 	h.writeRLeaf(h.upper(), data, flags)
 
-	// If the root page was split, make it look right.
+	// The root keeps its page number and becomes the parent of l and r.
 	if sp.pgno() == pRoot {
 		t.rroot(sp, l, r)
 	}
 
-	// Now we walk the parent page stack -- a LIFO stack of the pages that
-	// were traversed when we searched for the page that split.  We've
-	// just split a page, so we have to insert a new key into the parent
-	// page.  If the insert into the parent page causes it to split, may
-	// have to continue splitting all the way up the tree.
+	// Walk back up the descent path, adding r to each parent; a full
+	// parent splits too, and so on up to the root.
 	for {
 		parent, ok := t.pop()
 		if !ok {
@@ -42,14 +37,11 @@ func (t *tree) split(sp page, data []byte, flags byte, ilen, skip int) error {
 			return err
 		}
 
-		// The new key goes ONE AFTER the index, because the split
-		// was to the right.
+		// r is the new right sibling of the child at parent.index.
 		skip = parent.index + 1
 
-		// Calculate the space needed on the parent page.
 		nbytes := nrInternal
 
-		// Split the parent page if necessary or shift the indices.
 		var parentsplit bool
 		if h.upper()-h.lower() < nbytes+2 {
 			sp = h
@@ -65,21 +57,20 @@ func (t *tree) split(sp page, data []byte, flags byte, ilen, skip int) error {
 			h.insertLinp(skip)
 		}
 
-		// Insert the record counts into the parent page.
 		var nl, nr uint32
 		if rchild.isType(pRInternal) {
 			nl, nr = pageTotal(lchild), pageTotal(rchild)
 		} else {
 			nl, nr = uint32(lchild.nextIndex()), uint32(rchild.nextIndex())
 		}
-		// Update the left page count.  If split added at
-		// index 0, fix the correct page.
+		// The left child lost records to r.  If the parent split left
+		// the open slot at 0, the left child's entry is the last on l.
 		if skip > 0 {
 			h.setRinternal(skip-1, nl, lchild.pgno())
 		} else {
 			l.setRinternal(l.nextIndex()-1, nl, lchild.pgno())
 		}
-		// Update the right page count.
+		// New entry for the right child.
 		h.setUpper(h.upper() - nbytes)
 		h.setLinp(skip, h.upper())
 		h.writeRInternal(h.upper(), nr, rchild.pgno())
@@ -89,7 +80,7 @@ func (t *tree) split(sp page, data []byte, flags byte, ilen, skip int) error {
 			break
 		}
 
-		// If the root page was split, make it look right.
+		// A split root becomes the parent of l and r.
 		if sp.pgno() == pRoot {
 			t.rroot(sp, l, r)
 		}
@@ -101,19 +92,18 @@ func (t *tree) split(sp page, data []byte, flags byte, ilen, skip int) error {
 	return nil
 }
 
-// bpage splits a non-root page of a btree.
+// bpage splits non-root page h into h and a new right page, returning
+// the page with the open slot.
 func (t *tree) bpage(h page, skip *int, ilen int) (tp, l, r page, err error) {
-	// Put the new right page for the split into place.
 	var npg uint32
 	if npg, r, err = t.bnew(); err != nil {
 		return tp, l, r, err
 	}
 	r.init(npg, h.pgno(), h.nextpg(), h.flags()&pType, t.psize)
 
-	// If we're splitting the last page on a level because we're appending
-	// a key to it (skip is NEXTINDEX()), it's likely that the data is
-	// sorted.  Adding an empty page on the side of the level is less work
-	// and can push the fill factor much higher than normal.
+	// Appending past the last item of a level's rightmost page suggests
+	// sequential inserts: start r empty instead of moving half of h, which
+	// is cheaper and leaves h full.
 	if h.nextpg() == pInvalid && *skip == h.nextIndex() {
 		h.setNextpg(r.pgno())
 		r.setLower(dataOff + 2)
@@ -121,11 +111,10 @@ func (t *tree) bpage(h page, skip *int, ilen int) (tp, l, r page, err error) {
 		return r, h, r, nil
 	}
 
-	// Put the new left page for the split into place.
 	l = t.page(make([]byte, t.psize))
 	l.init(h.pgno(), h.prevpg(), r.pgno(), h.flags()&pType, t.psize)
 
-	// Fix up the previous pointer of the page after the split page.
+	// The old right neighbour now follows r.
 	if h.nextpg() != pInvalid {
 		next, err := t.get(h.nextpg())
 		if err != nil {
@@ -135,8 +124,8 @@ func (t *tree) bpage(h page, skip *int, ilen int) (tp, l, r page, err error) {
 		t.dirty(next)
 	}
 
-	// Split right.  Since the left page can't change, we have to swap
-	// the original and the allocated left page after the split.
+	// h must keep its page number for the parent, so its left half is
+	// built in a scratch page and copied back.
 	left, err := t.psplit(h, l, r, skip, ilen)
 	if err != nil {
 		return tp, l, r, err
@@ -148,7 +137,8 @@ func (t *tree) bpage(h page, skip *int, ilen int) (tp, l, r page, err error) {
 	return r, h, r, nil
 }
 
-// root splits the root page of a btree.
+// root moves the items of root page h into two new pages, l and r,
+// returning the one with the open slot.
 func (t *tree) root(h page, skip *int, ilen int) (tp, l, r page, err error) {
 	var lnpg, rnpg uint32
 	if lnpg, l, err = t.bnew(); err != nil {
@@ -166,7 +156,7 @@ func (t *tree) root(h page, skip *int, ilen int) (tp, l, r page, err error) {
 	return r, l, r, err
 }
 
-// rroot fixes up the recno root page after it has been split.
+// rroot rewrites root page h as a recno internal page over l and r.
 func (t *tree) rroot(h, l, r page) {
 	count := func(p page) uint32 {
 		if p.isType(pRLeaf) {
@@ -185,11 +175,9 @@ func (t *tree) rroot(h, l, r page) {
 	t.dirty(h)
 }
 
-// psplit does the real work of splitting the page, reporting whether the
-// open slot ended up on the left page.
+// psplit distributes the items of h between l and r, about half a page
+// to l, leaving slot *pskip open, and reports whether that slot is on l.
 func (t *tree) psplit(h, l, r page, pskip *int, ilen int) (left bool, err error) {
-	// Split the data to the left and right pages.  Leave the skip index
-	// open.
 	skip := *pskip
 	full := t.psize - dataOff
 	half := full / 2
@@ -218,16 +206,13 @@ func (t *tree) psplit(h, l, r page, pskip *int, ilen int) (left bool, err error)
 			nbytes = len(src)
 		}
 
-		// If the key/data pairs are substantial fractions of the max
-		// possible size for the page, it's possible to get situations
-		// where we decide to try and copy too much onto the left page.
-		// Unlike 1.85, account for the index array too.
+		// Large items could overflow l; stop before they do.  Unlike
+		// 1.85, account for the index array too.
 		if skip <= off && used+nbytes+2*(off+1) >= full {
 			off--
 			break
 		}
 
-		// Copy the key/data pair, if not the skipped index.
 		if skip != off {
 			nxt++
 			l.appendItem(off, src)
@@ -242,13 +227,10 @@ func (t *tree) psplit(h, l, r page, pskip *int, ilen int) (left bool, err error)
 		}
 	}
 
-	// Off is the last offset that's valid for the left page.
-	// Nxt is the first offset to be placed on the right page.
+	// off is the last slot of l, nxt the first item for r.
 	l.setLower(l.lower() + (off+1)*2)
 
-	// If the skipped index was on the left page, just return that page.
-	// Otherwise, adjust the skip index to reflect the new position on
-	// the right page.
+	// Rebase *pskip on r if the open slot landed there.
 	if left = skip <= off; left {
 		skip = 0
 	} else {
@@ -268,14 +250,14 @@ func (t *tree) psplit(h, l, r page, pskip *int, ilen int) (left bool, err error)
 		nxt++
 	}
 	r.setLower(r.lower() + off*2)
-	// If the key is being appended to the page, adjust the index.
+	// An open slot past the last item still needs its index entry.
 	if skip == top {
 		r.setLower(r.lower() + 2)
 	}
 	return left, nil
 }
 
-// pageTotal returns the number of recno entries below a page.
+// pageTotal sums the record counts of internal page h.
 func pageTotal(h page) uint32 {
 	var recs uint32
 	for i := range h.nextIndex() {

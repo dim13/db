@@ -2,7 +2,7 @@ package hash
 
 import "math/bits"
 
-// log2 returns ceiling of log2(num), as __log2 in C.
+// log2 returns the ceiling of log2(num), 0 for 0 and 1.
 func log2(num uint32) uint32 {
 	if num == 0 {
 		return 0

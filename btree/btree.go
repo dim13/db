@@ -34,20 +34,20 @@ const RDup Flag = 0x01
 
 // Tree flags; bNoDups is stored on disk
 const (
-	bInMem    = 1 << iota // in-memory tree
-	_                     // B_METADIRTY
-	bModified             // tree modified
-	_                     // B_NEEDSWAP
-	bRdOnly               // read-only tree
-	bNoDups               // no duplicate keys permitted
+	bInMem    = 1 << iota // no backing file
+	_                     // unused: metadata dirty
+	bModified             // has unsynced changes
+	_                     // unused: byte swap needed
+	bRdOnly               // opened read-only
+	bNoDups               // duplicates rejected
 )
 
 // Cursor flags
 const (
-	cursAcquire = 1 << iota // cursor needs to be reacquired
-	cursAfter               // unreturned cursor after key
-	cursBefore              // unreturned cursor before key
-	cursInit                // cursor initialized
+	cursAcquire = 1 << iota // record gone, relocate by saved key
+	cursAfter               // moved to next duplicate, not yet returned
+	cursBefore              // moved to previous duplicate, not yet returned
+	cursInit                // scan started
 )
 
 const (
@@ -82,8 +82,8 @@ type epg struct {
 
 // cursor is the sequential scan position used by Seq.
 type cursor struct {
-	pg    epgno  // saved tree reference
-	key   []byte // saved key, or nil
+	pg    epgno  // current record
+	key   []byte // key to relocate by, or nil
 	flags flags.Set[uint8]
 }
 
@@ -99,11 +99,11 @@ type DB struct {
 	cursor   cursor
 	stack    []epgno
 	leaf     uint32 // leaf page the stack leads to
-	free     uint32 // next free page
+	free     uint32 // head of the free list
 	psize    int
-	ovflsize int // cut-off for key/data overflow
+	ovflsize int // larger items go to overflow pages
 	order    int
-	last     epgno // last insert
+	last     epgno // previous insert, for fast
 	cmp      func(a, b []byte) int
 	pfx      func(a, b []byte) int
 	flags    flags.Set[uint32]
@@ -343,7 +343,7 @@ func (t *DB) writeMeta() error {
 	return nil
 }
 
-// bfree puts a page on the freelist.
+// bfree pushes h onto the free list.
 func (t *DB) bfree(h page) {
 	h.setPrevpg(pInvalid)
 	h.setNextpg(t.free)
@@ -351,7 +351,7 @@ func (t *DB) bfree(h page) {
 	t.dirty(h)
 }
 
-// bnew gets a new page, preferably from the freelist.
+// bnew allocates a page, reusing a freed one when possible.
 func (t *DB) bnew() (uint32, page, error) {
 	if t.free != pInvalid {
 		h, err := t.get(t.free)
@@ -367,7 +367,7 @@ func (t *DB) bnew() (uint32, page, error) {
 	return npg, t.page(b), nil
 }
 
-// ovflGet gets an overflow key/data item.
+// ovflGet reads the item referenced by ref from its overflow chain.
 func (t *DB) ovflGet(ref []byte) ([]byte, error) {
 	pg := t.o.Uint32(ref)
 	sz := int(t.o.Uint32(ref[4:]))
@@ -386,7 +386,7 @@ func (t *DB) ovflGet(ref []byte) ([]byte, error) {
 	return buf, nil
 }
 
-// ovflPut stores an overflow key/data item and returns its reference.
+// ovflPut writes data to a new overflow chain and returns a reference to it.
 func (t *DB) ovflPut(data []byte) ([]byte, error) {
 	plen := t.psize - dataOff
 	var first uint32
@@ -419,7 +419,7 @@ func (t *DB) ovflPut(data []byte) ([]byte, error) {
 	return ref, nil
 }
 
-// ovflDelete deletes an overflow chain.
+// ovflDelete frees the overflow chain referenced by ref.
 func (t *DB) ovflDelete(ref []byte) error {
 	pg := t.o.Uint32(ref)
 	sz := int(t.o.Uint32(ref[4:]))
@@ -427,7 +427,7 @@ func (t *DB) ovflDelete(ref []byte) error {
 	if err != nil {
 		return err
 	}
-	// Don't delete chains used by internal pages.
+	// An internal page still references it.
 	if h.flags()&pPreserve != 0 {
 		return nil
 	}
@@ -444,7 +444,7 @@ func (t *DB) ovflDelete(ref []byte) error {
 	return nil
 }
 
-// ret builds return key/data pair.
+// ret returns copies of the key and/or data of record e.
 func (t *DB) ret(e epg, wantKey, wantData bool) (key, data []byte, err error) {
 	bl := e.page.bleaf(e.index)
 	if wantKey {
@@ -468,11 +468,11 @@ func (t *DB) ret(e epg, wantKey, wantData bool) (key, data []byte, err error) {
 	return key, data, nil
 }
 
-// compare compares a key to a given record.
+// compare orders k1 against the key of record e.
 func (t *DB) compare(k1 []byte, e epg) (int, error) {
 	h := e.page
-	// The left-most key on internal pages, at any level of the tree, is
-	// guaranteed to be less than any user key.
+	// The first entry of the leftmost internal page on a level has no
+	// key and sorts before everything.
 	if e.index == 0 && h.prevpg() == pInvalid && !h.isType(pBLeaf) {
 		return 1, nil
 	}
@@ -514,8 +514,8 @@ func defPrefix(a, b []byte) int {
 	return len(a)
 }
 
-// search searches a btree for a key, leaving the parent pages on t.stack
-// for split and delete.
+// search looks up key, leaving the path of parent pages on t.stack for
+// split and delete.
 func (t *DB) search(key []byte) (*epg, bool, error) {
 	t.stack = t.stack[:0]
 	cur, exact, leaf, err := t.lookup(key, &t.stack)
@@ -557,7 +557,8 @@ func (t *DB) lookup(key []byte, stack *[]epgno) (cur epg, exact bool, leaf uint3
 		}
 
 		if !found {
-			// If it's a leaf page, we're almost done.
+			// No match here; with duplicates one may still sit at the edge
+			// of a sibling leaf.
 			if h.isType(pBLeaf) {
 				if t.flags.IsClr(bNoDups) {
 					var pg uint32
@@ -652,7 +653,7 @@ func (t *DB) put(key, data []byte, flag db.Flag) error {
 	switch flag {
 	case db.RNone, db.RNoOverwrite:
 	case db.RCursor:
-		// Must already have started a scan and not have already deleted it.
+		// The cursor must sit on a live record.
 		if t.cursor.flags.IsSet(cursInit) && t.cursor.flags.IsClr(cursAcquire|cursAfter|cursBefore) {
 			break
 		}
@@ -661,9 +662,8 @@ func (t *DB) put(key, data []byte, flag db.Flag) error {
 		return db.ErrInvalid
 	}
 
-	// If the key/data pair won't fit on a page, store it on overflow
-	// pages.  Only put the key on the overflow page if the pair are
-	// still too big after moving the data to an overflow page.
+	// Oversized items go to overflow pages. The key moves only if it is
+	// too big by itself, or the pair still is after moving the data.
 	// Unlike 1.85, search with the original key, not the overflow
 	// reference, or big keys end up misplaced.
 	skey := key
@@ -703,7 +703,7 @@ func (t *DB) put(key, data []byte, flag db.Flag) error {
 			return err
 		}
 	default:
-		// Find the key to delete, or, the location at which to insert.
+		// Try the sorted-insert shortcut before a full search.
 		var e *epg
 		var exact bool
 		if t.order != orderNot {
@@ -721,15 +721,14 @@ func (t *DB) put(key, data []byte, flag db.Flag) error {
 		case flag == db.RNoOverwrite && exact:
 			return db.ErrKeyExist
 		case flag != db.RNoOverwrite && exact && t.flags.IsSet(bNoDups):
-			// Note, the delete may empty the page, so we need to put a
-			// new entry into the page immediately.
+			// Replace in place; the record is written right below, even
+			// if the delete emptied the page.
 			if err := t.dleaf(skey, h, index); err != nil {
 				return err
 			}
 		}
 	}
 
-	// If not enough room, split the page.
 	nbytes := nbleafdbt(len(key), len(data))
 	if h.upper()-h.lower() < nbytes+2 {
 		if err := t.split(h, key, data, dflags, nbytes, index); err != nil {
@@ -744,7 +743,7 @@ func (t *DB) put(key, data []byte, flag db.Flag) error {
 	h.setLinp(index, h.upper())
 	h.writeBLeaf(h.upper(), key, data, dflags)
 
-	// If the cursor is on this page, adjust it as necessary.
+	// Records from index on have shifted up by one.
 	if t.cursor.flags.IsSet(cursInit) && t.cursor.flags.IsClr(cursAcquire) &&
 		t.cursor.pg.pgno == h.pgno() && t.cursor.pg.index >= index {
 		t.cursor.pg.index++
@@ -769,7 +768,8 @@ func (t *DB) put(key, data []byte, flag db.Flag) error {
 	return nil
 }
 
-// fast does a quick check for sorted data.
+// fast tries to place key next to the previous insert, which pays off when
+// keys arrive in order. It returns nil if a full search is needed.
 func (t *DB) fast(skey, key, data []byte) (*epg, bool) {
 	h, err := t.get(t.last.pgno)
 	if err != nil {
@@ -778,8 +778,7 @@ func (t *DB) fast(skey, key, data []byte) (*epg, bool) {
 	}
 	t.cur = epg{page: h, index: t.last.index}
 
-	// If won't fit in this page or have too many keys in this page,
-	// have to search to get split stack.
+	// A split needs the parent stack, which only search builds.
 	nbytes := nbleafdbt(len(key), len(data))
 	if h.upper()-h.lower() < nbytes+2 {
 		t.order = orderNot

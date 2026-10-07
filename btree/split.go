@@ -5,9 +5,7 @@ import "github.com/dim13/db"
 // split splits page sp and inserts key/data with flags at index skip,
 // ilen is the insert length.
 func (t *DB) split(sp page, key, data []byte, flags byte, ilen, skip int) error {
-	// Split the page into two pages, l and r.  The split routines return
-	// the page into which the key should be inserted and with skip set
-	// to the offset which should be used.
+	// h is the half that receives the new item, skip its slot there.
 	var h, l, r page
 	var err error
 	if sp.pgno() == pRoot {
@@ -18,23 +16,19 @@ func (t *DB) split(sp page, key, data []byte, flags byte, ilen, skip int) error 
 		return err
 	}
 
-	// Insert the new key/data pair into the leaf page.
 	h.setUpper(h.upper() - ilen)
 	h.setLinp(skip, h.upper())
 	h.writeBLeaf(h.upper(), key, data, flags)
 
-	// If the root page was split, make it look right.
+	// The root keeps its page number, so rebuild it over l and r.
 	if sp.pgno() == pRoot {
 		if err := t.broot(sp, l, r); err != nil {
 			return err
 		}
 	}
 
-	// Now we walk the parent page stack -- a LIFO stack of the pages that
-	// were traversed when we searched for the page that split.  We've
-	// just split a page, so we have to insert a new key into the parent
-	// page.  If the insert into the parent page causes it to split, may
-	// have to continue splitting all the way up the tree.
+	// Propagate the split upwards along the search path: each parent
+	// needs a separator for the new right page and may split in turn.
 	for {
 		parent, ok := t.pop()
 		if !ok {
@@ -46,15 +40,11 @@ func (t *DB) split(sp page, key, data []byte, flags byte, ilen, skip int) error 
 			return err
 		}
 
-		// The new key goes ONE AFTER the index, because the split
-		// was to the right.
+		// The new right page follows the old one in the parent.
 		skip = parent.index + 1
 
-		// Calculate the space needed on the parent page.
-		//
-		// Prefix trees: space hack when inserting into BINTERNAL
-		// pages.  Retain only what's needed to distinguish between
-		// the new entry and the LAST entry on the page to its left.
+		// With a prefix function, a leaf separator is truncated to what
+		// distinguishes it from the last key on the left page.
 		var nbytes, nksize int
 		var bi binternal
 		var bl bleaf
@@ -81,7 +71,6 @@ func (t *DB) split(sp page, key, data []byte, flags byte, ilen, skip int) error 
 			return db.ErrPageType
 		}
 
-		// Split the parent page if necessary or shift the indices.
 		var parentsplit bool
 		if h.upper()-h.lower() < nbytes+2 {
 			sp = h
@@ -97,7 +86,6 @@ func (t *DB) split(sp page, key, data []byte, flags byte, ilen, skip int) error 
 			h.insertLinp(skip)
 		}
 
-		// Insert the key into the parent page.
 		switch rchild.flags() & pType {
 		case pBInternal:
 			h.appendItem(skip, bi.raw)
@@ -122,7 +110,7 @@ func (t *DB) split(sp page, key, data []byte, flags byte, ilen, skip int) error 
 			break
 		}
 
-		// If the root page was split, make it look right.
+		// Parent split too; rebuild it if it was the root.
 		if sp.pgno() == pRoot {
 			if err := t.broot(sp, l, r); err != nil {
 				return err
@@ -136,19 +124,17 @@ func (t *DB) split(sp page, key, data []byte, flags byte, ilen, skip int) error 
 	return nil
 }
 
-// bpage splits a non-root page of a btree.
+// bpage splits non-root page h into h and a new right sibling.
 func (t *DB) bpage(h page, skip *int, ilen int) (tp, l, r page, err error) {
-	// Put the new right page for the split into place.
 	var npg uint32
 	if npg, r, err = t.bnew(); err != nil {
 		return tp, l, r, err
 	}
 	r.init(npg, h.pgno(), h.nextpg(), h.flags()&pType, t.psize)
 
-	// If we're splitting the last page on a level because we're appending
-	// a key to it (skip is NEXTINDEX()), it's likely that the data is
-	// sorted.  Adding an empty page on the side of the level is less work
-	// and can push the fill factor much higher than normal.
+	// Appending past the end of a level hints at sorted input: start an
+	// empty right page instead of moving half the items, which is cheaper
+	// and leaves pages nearly full.
 	if h.nextpg() == pInvalid && *skip == h.nextIndex() {
 		h.setNextpg(r.pgno())
 		r.setLower(dataOff + 2)
@@ -156,11 +142,9 @@ func (t *DB) bpage(h page, skip *int, ilen int) (tp, l, r page, err error) {
 		return r, h, r, nil
 	}
 
-	// Put the new left page for the split into place.
 	l = t.page(make([]byte, t.psize))
 	l.init(h.pgno(), h.prevpg(), r.pgno(), h.flags()&pType, t.psize)
 
-	// Fix up the previous pointer of the page after the split page.
 	if h.nextpg() != pInvalid {
 		next, err := t.get(h.nextpg())
 		if err != nil {
@@ -170,8 +154,8 @@ func (t *DB) bpage(h page, skip *int, ilen int) (tp, l, r page, err error) {
 		t.dirty(next)
 	}
 
-	// Split right.  Since the left page can't change, we have to swap
-	// the original and the allocated left page after the split.
+	// The left half must keep h's page number, so it is built in a
+	// scratch page and copied back over h.
 	left, err := t.psplit(h, l, r, skip, ilen)
 	if err != nil {
 		return tp, l, r, err
@@ -183,7 +167,8 @@ func (t *DB) bpage(h page, skip *int, ilen int) (tp, l, r page, err error) {
 	return r, h, r, nil
 }
 
-// root splits the root page of a btree.
+// root moves the items of root page h into two new pages, leaving h to
+// be rebuilt by broot.
 func (t *DB) root(h page, skip *int, ilen int) (tp, l, r page, err error) {
 	var lnpg, rnpg uint32
 	if lnpg, l, err = t.bnew(); err != nil {
@@ -201,12 +186,11 @@ func (t *DB) root(h page, skip *int, ilen int) (tp, l, r page, err error) {
 	return r, l, r, err
 }
 
-// broot fixes up the btree root page after it has been split.
+// broot turns root page h into an internal page over its halves l and r.
 func (t *DB) broot(h, l, r page) error {
-	// If the root page was a leaf page, change it into an internal page.
-	// We copy the key we split on (but not the key's data, in the case of
-	// a leaf page) to the new root page.  The left-most key on any level
-	// of the tree is never used, so it doesn't need to be filled in.
+	// The first entry points to l and needs no key, as the leftmost key
+	// of a level is never compared. The second carries r's first key,
+	// without its data.
 	h.setUpper(t.psize - nbinternal(0))
 	h.setLinp(0, h.upper())
 	h.writeBInternal(h.upper(), 0, l.pgno(), 0, nil)
@@ -216,10 +200,10 @@ func (t *DB) broot(h, l, r page) error {
 		bl := r.bleaf(0)
 		h.setUpper(h.upper() - nbinternal(bl.ksize))
 		h.setLinp(1, h.upper())
-		// 1.85 drops the P_BIGKEY flag here, fixed as in 1.86.
+		// 1.85 drops the pBigKey flag here, fixed as in 1.86.
 		h.writeBInternal(h.upper(), bl.ksize, r.pgno(), bl.flags&pBigKey, bl.key)
-		// If the key is on an overflow page, mark the overflow chain
-		// so it isn't deleted when the leaf copy of the key is deleted.
+		// The overflow key is now shared with the root; it must outlive
+		// the leaf record.
 		if bl.flags&pBigKey != 0 {
 			if err := t.preserve(t.o.Uint32(bl.key)); err != nil {
 				return err
@@ -233,20 +217,19 @@ func (t *DB) broot(h, l, r page) error {
 		return db.ErrPageType
 	}
 
-	// There are two keys on the page.
+	// Two index entries.
 	h.setLower(dataOff + 2*2)
 	h.setFlags(h.flags()&^pType | pBInternal)
 	t.dirty(h)
 	return nil
 }
 
-// psplit does the real work of splitting the page, reporting whether the
-// open slot ended up on the left page.
+// psplit distributes the items of h over l and r, leaving slot *pskip
+// open for the new item, and reports whether that slot is on l.
 func (t *DB) psplit(h, l, r page, pskip *int, ilen int) (left bool, err error) {
-	// Split the data to the left and right pages.  Leave the skip index
-	// open.  Additionally, make some effort not to split on an overflow
-	// key.  This makes internal page processing faster and can save
-	// space as overflow keys used by internal pages are never deleted.
+	// Fill l to about half. Take a few more items rather than splitting
+	// at an overflow key: the separator would copy it into the parent,
+	// and overflow keys referenced from internal pages are never freed.
 	var bigkeycnt int
 	skip := *pskip
 	full := t.psize - dataOff
@@ -279,16 +262,13 @@ func (t *DB) psplit(h, l, r page, pskip *int, ilen int) (left bool, err error) {
 			isbigkey = h.isBigKey(nxt)
 		}
 
-		// If the key/data pairs are substantial fractions of the max
-		// possible size for the page, it's possible to get situations
-		// where we decide to try and copy too much onto the left page.
+		// With large items l could overflow; stop before it does.
 		// Unlike 1.85, account for the index array too.
 		if skip <= off && used+nbytes+2*(off+1) >= full {
 			off--
 			break
 		}
 
-		// Copy the key/data pair, if not the skipped index.
 		if skip != off {
 			nxt++
 			l.appendItem(off, src)
@@ -306,14 +286,11 @@ func (t *DB) psplit(h, l, r page, pskip *int, ilen int) (left bool, err error) {
 		}
 	}
 
-	// Off is the last offset that's valid for the left page.
-	// Nxt is the first offset to be placed on the right page.
+	// off is the last slot on l, nxt the first item of h going to r.
 	l.setLower(l.lower() + (off+1)*2)
 
-	// If splitting the page that the cursor was on, the cursor has to be
-	// adjusted to point to the same record as before the split.  Unlike
-	// 1.85, count the open slot too when it is on the left page, which
-	// holds off+1 entries.
+	// Keep the cursor on its record. Unlike 1.85, count the open slot too
+	// when it is on the left page, which holds off+1 entries.
 	c := &t.cursor
 	if c.flags.IsSet(cursInit) && c.pg.pgno == h.pgno() {
 		if c.pg.index >= skip {
@@ -327,9 +304,7 @@ func (t *DB) psplit(h, l, r page, pskip *int, ilen int) (left bool, err error) {
 		}
 	}
 
-	// If the skipped index was on the left page, just return that page.
-	// Otherwise, adjust the skip index to reflect the new position on
-	// the right page.
+	// An open slot on l is done with; otherwise rebase it to r.
 	if left = skip <= off; left {
 		skip = 0
 	} else {
@@ -349,7 +324,7 @@ func (t *DB) psplit(h, l, r page, pskip *int, ilen int) (left bool, err error) {
 		nxt++
 	}
 	r.setLower(r.lower() + off*2)
-	// If the key is being appended to the page, adjust the index.
+	// An open slot at the very end of r still needs its index entry.
 	if skip == top {
 		r.setLower(r.lower() + 2)
 	}
@@ -367,7 +342,8 @@ func (p page) isBigKey(i int) bool {
 	return false
 }
 
-// preserve marks a chain of pages as used by an internal node.
+// preserve flags overflow chain pg as referenced by an internal page, so
+// ovflDelete leaves it alone.
 func (t *DB) preserve(pg uint32) error {
 	h, err := t.get(pg)
 	if err != nil {

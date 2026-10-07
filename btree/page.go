@@ -12,31 +12,31 @@ import (
 )
 
 const (
-	pInvalid = 0 // invalid tree page number
-	pMeta    = 0 // tree metadata page number
-	pRoot    = 1 // tree root page number
+	pInvalid = 0 // no page, as a link
+	pMeta    = 0 // header page
+	pRoot    = 1 // root, never moves
 )
 
 // Page types
 const (
-	pBInternal = 1 << iota // btree internal page
-	pBLeaf                 // leaf page
-	pOverflow              // overflow page
-	pRInternal             // recno internal page
-	pRLeaf                 // recno leaf page
-	pPreserve              // never delete this chain of pages
+	pBInternal = 1 << iota // btree branch
+	pBLeaf                 // btree leaf
+	pOverflow              // part of an overflow chain
+	pRInternal             // recno branch
+	pRLeaf                 // recno leaf
+	pPreserve              // overflow chain referenced by an internal page
 
-	pType = pPreserve - 1 // type mask
+	pType = pPreserve - 1 // page type bits
 )
 
 // Item flags
 const (
-	pBigData = 1 << iota // overflow data
-	pBigKey              // overflow key
+	pBigData = 1 << iota // data is in an overflow chain
+	pBigKey              // key is in an overflow chain
 )
 
 const (
-	dataOff   = 20 // BTDATAOFF: size of page header
+	dataOff   = 20 // header size, the index array starts here
 	novflSize = 8  // size of {pgno, size} overflow reference
 )
 

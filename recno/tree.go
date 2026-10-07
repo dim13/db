@@ -24,27 +24,27 @@ const (
 	minCache      = 5 // pages
 )
 
-// Tree flags; bNoDups and rRecno are stored on disk
+// Tree flags; bNoDups and rRecno are stored on disk.
 const (
-	bInMem    = 1 << iota // in-memory tree
-	_                     // B_METADIRTY
-	bModified             // tree modified
-	_                     // B_NEEDSWAP
-	bRdOnly               // read-only tree
-	bNoDups               // no duplicate keys permitted
-	_                     // R_CLOSEFP
-	rRecno                // record oriented tree
-	rEOF                  // end of input file reached
-	rFixLen               // fixed length records
-	_                     // R_MEMMAPPED
-	rInMem                // in-memory file
-	rModified             // modified file
-	rRdOnly               // read-only record source
+	bInMem    = 1 << iota // no btree file
+	_                     // unused: metadata dirty
+	bModified             // pages changed since sync
+	_                     // unused: byte swap needed
+	bRdOnly               // opened read-only
+	bNoDups               // keys are unique
+	_                     // unused: close file pointer
+	rRecno                // tree holds numbered records
+	rEOF                  // flat file fully read
+	rFixLen               // records of reclen bytes
+	_                     // unused: memory-mapped file
+	rInMem                // no flat file
+	rModified             // records changed since sync
+	rRdOnly               // flat file cannot be rewritten
 
 	saveMeta = bNoDups | rRecno
 )
 
-const cursInit = 0x08 // cursor initialized
+const cursInit = 0x08 // cursor has a position
 
 // epgno references an item by page number, as kept on the descent stack.
 type epgno struct {
@@ -60,7 +60,7 @@ type epg struct {
 
 // cursor is the sequential scan position used by Seq.
 type cursor struct {
-	rcursor uint32 // recno cursor (1-based)
+	rcursor uint32 // current record number, 1-based
 	flags   flags.Set[uint8]
 }
 
@@ -73,13 +73,13 @@ type tree struct {
 	cur      epg
 	cursor   cursor
 	stack    []epgno
-	free     uint32 // next free page
+	free     uint32 // head of the free page list
 	psize    int
-	ovflsize int // cut-off for key/data overflow
+	ovflsize int // larger records go to overflow pages
 	flags    flags.Set[uint32]
 
 	// recno
-	rfile  *os.File      // record file
+	rfile  *os.File      // flat file
 	rsrc   *bufio.Reader // record source, nil when fully read
 	nrecs  uint32
 	reclen int
@@ -162,7 +162,7 @@ func openTree(file *os.File, psize, cache int, o binary.ByteOrder) (*tree, error
 	return t, nil
 }
 
-// nroot creates the root of a new tree.
+// nroot allocates the meta and root pages of an empty tree.
 func (t *tree) nroot() error {
 	if _, err := t.mp.get(pMeta); err == nil {
 		return nil
@@ -258,7 +258,7 @@ func (t *tree) writeMeta() error {
 	return nil
 }
 
-// bfree puts a page on the freelist.
+// bfree pushes h onto the free page list.
 func (t *tree) bfree(h page) {
 	h.setPrevpg(pInvalid)
 	h.setNextpg(t.free)
@@ -266,7 +266,7 @@ func (t *tree) bfree(h page) {
 	t.dirty(h)
 }
 
-// bnew gets a new page, preferably from the freelist.
+// bnew returns a page to fill, reusing a freed one if possible.
 func (t *tree) bnew() (uint32, page, error) {
 	if t.free != pInvalid {
 		h, err := t.get(t.free)
@@ -282,7 +282,7 @@ func (t *tree) bnew() (uint32, page, error) {
 	return npg, t.page(b), nil
 }
 
-// ovflGet gets an overflow key/data item.
+// ovflGet reads the data an overflow reference points to.
 func (t *tree) ovflGet(ref []byte) ([]byte, error) {
 	pg := t.o.Uint32(ref)
 	sz := int(t.o.Uint32(ref[4:]))
@@ -301,7 +301,7 @@ func (t *tree) ovflGet(ref []byte) ([]byte, error) {
 	return buf, nil
 }
 
-// ovflPut stores an overflow key/data item and returns its reference.
+// ovflPut writes data to a new overflow chain and returns its reference.
 func (t *tree) ovflPut(data []byte) ([]byte, error) {
 	plen := t.psize - dataOff
 	var first uint32
@@ -334,7 +334,7 @@ func (t *tree) ovflPut(data []byte) ([]byte, error) {
 	return ref, nil
 }
 
-// ovflDelete deletes an overflow chain.
+// ovflDelete frees the overflow chain behind ref.
 func (t *tree) ovflDelete(ref []byte) error {
 	pg := t.o.Uint32(ref)
 	sz := int(t.o.Uint32(ref[4:]))
@@ -342,7 +342,7 @@ func (t *tree) ovflDelete(ref []byte) error {
 	if err != nil {
 		return err
 	}
-	// Don't delete chains used by internal pages.
+	// A preserved chain is still referenced by an internal page.
 	if h.flags()&pPreserve != 0 {
 		return nil
 	}
