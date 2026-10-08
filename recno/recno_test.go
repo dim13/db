@@ -14,6 +14,9 @@ import (
 	"github.com/dim13/db/internal/dbtest"
 )
 
+// DB must implement db.DB.
+var _ db.DB = (*DB)(nil)
+
 func key(n int) []byte {
 	return binary.NativeEndian.AppendUint32(nil, uint32(n))
 }

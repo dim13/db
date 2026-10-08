@@ -12,6 +12,9 @@ import (
 	"github.com/dim13/db/internal/dbtest"
 )
 
+// DB must implement db.DB.
+var _ db.DB = (*DB)(nil)
+
 func open(t testing.TB, name string, info *Info) db.DB {
 	t.Helper()
 	f, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE, 0644)
