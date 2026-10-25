@@ -25,19 +25,19 @@ func FuzzOps(f *testing.F) {
 	f.Fuzz(func(t *testing.T, ops []byte) {
 		name := filepath.Join(t.TempDir(), "test.db")
 		d := open(t, name, &Info{PageSize: 512, CacheSize: 1})
-		d, err := dbtest.Ops(d, ops, func(d db.DB) (db.DB, error) {
+		td, err := dbtest.Ops(testDB{d}, ops, func(d dbtest.DB) (dbtest.DB, error) {
 			if err := d.Close(); err != nil {
 				return nil, err
 			}
-			return open(t, name, &Info{PageSize: 512, CacheSize: 1}), nil
+			return testDB{open(t, name, &Info{PageSize: 512, CacheSize: 1})}, nil
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := dbtest.Sorted(d); err != nil {
+		if err := dbtest.Sorted(td); err != nil {
 			t.Fatal(err)
 		}
-		if err := d.Close(); err != nil {
+		if err := td.Close(); err != nil {
 			t.Fatal(err)
 		}
 	})

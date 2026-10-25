@@ -15,6 +15,20 @@ import (
 	"github.com/dim13/db"
 )
 
+// Scanner scans all records in database order.
+type Scanner interface {
+	Scan(yield func(key, data []byte) bool) error
+}
+
+// DB is what the helpers need from an access method.
+type DB interface {
+	Scanner
+	Get(key []byte) ([]byte, error)
+	Put(key, data []byte) error
+	Delete(key []byte) error
+	Close() error
+}
+
 // Gen returns the i-th key/data pair, the same as testdata/dbtool.c.
 func Gen(i int) ([]byte, []byte) {
 	dl := (i * 37) % 300
@@ -41,24 +55,21 @@ func sum(b []byte) uint32 {
 	return h.Sum32()
 }
 
-// Dump returns all records of d as sorted lines in dbtool dump format.
-func Dump(d db.DB, recno bool) ([]string, error) {
+// Dump returns all records of s as sorted lines in dbtool dump format.
+func Dump(s Scanner, recno bool) ([]string, error) {
 	var lines []string
-	for flag := db.RFirst; ; flag = db.RNext {
-		k, v, err := d.Seq(nil, flag)
-		if errors.Is(err, db.ErrNotFound) {
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-		var s string
+	err := s.Scan(func(k, v []byte) bool {
+		var ks string
 		if recno {
-			s = fmt.Sprint(binary.NativeEndian.Uint32(k))
+			ks = fmt.Sprint(binary.NativeEndian.Uint32(k))
 		} else {
-			s = fmt.Sprintf("%d:%08x", len(k), sum(k))
+			ks = fmt.Sprintf("%d:%08x", len(k), sum(k))
 		}
-		lines = append(lines, fmt.Sprintf("%s %d:%08x", s, len(v), sum(v)))
+		lines = append(lines, fmt.Sprintf("%s %d:%08x", ks, len(v), sum(v)))
+		return true
+	})
+	if err != nil {
+		return nil, err
 	}
 	slices.Sort(lines)
 	return lines, nil
@@ -95,7 +106,7 @@ func Compare(got, want []string) error {
 // Model runs n random operations against d and a map, returning the first
 // disagreement.  Reopen, if not nil, is called four times to close and
 // reopen the database; Model returns the database last in use.
-func Model(d db.DB, n int, reopen func(db.DB) (db.DB, error)) (db.DB, error) {
+func Model(d DB, n int, reopen func(DB) (DB, error)) (DB, error) {
 	r := rand.New(rand.NewPCG(1, 2))
 	m := make(map[string][]byte)
 	for op := range n {
@@ -106,18 +117,18 @@ func Model(d db.DB, n int, reopen func(db.DB) (db.DB, error)) (db.DB, error) {
 		}
 		switch r.IntN(4) {
 		case 0, 1:
-			if _, err := d.Put(key, data, db.RNone); err != nil {
+			if err := d.Put(key, data); err != nil {
 				return d, fmt.Errorf("op %d put %d: %w", op, i, err)
 			}
 			m[string(key)] = data
 		case 2:
-			err := d.Del(key, db.RNone)
+			err := d.Delete(key)
 			if _, ok := m[string(key)]; ok != (err == nil) {
 				return d, fmt.Errorf("op %d del %d: %v, in model %v", op, i, err, ok)
 			}
 			delete(m, string(key))
 		case 3:
-			got, err := d.Get(key, db.RNone)
+			got, err := d.Get(key)
 			want, ok := m[string(key)]
 			if ok != (err == nil) || !bytes.Equal(got, want) {
 				return d, fmt.Errorf("op %d get %d: %v, in model %v", op, i, err, ok)
@@ -140,7 +151,7 @@ func Model(d db.DB, n int, reopen func(db.DB) (db.DB, error)) (db.DB, error) {
 // the first key, and the third the data length, 255 for overflow-sized
 // data.  Reopen, if not nil, is called before the final check; Ops
 // returns the database last in use.
-func Ops(d db.DB, ops []byte, reopen func(db.DB) (db.DB, error)) (db.DB, error) {
+func Ops(d DB, ops []byte, reopen func(DB) (DB, error)) (DB, error) {
 	m := make(map[string][]byte)
 	for i := 0; i+3 <= len(ops); i += 3 {
 		n := int(ops[i+2])
@@ -152,18 +163,18 @@ func Ops(d db.DB, ops []byte, reopen func(db.DB) (db.DB, error)) (db.DB, error) 
 			key, _ := Gen((int(ops[i+1]) + j) % 256)
 			switch ops[i] & 0xf % 3 {
 			case 0:
-				if _, err := d.Put(key, data, db.RNone); err != nil {
+				if err := d.Put(key, data); err != nil {
 					return d, fmt.Errorf("op %d put: %w", i/3, err)
 				}
 				m[string(key)] = data
 			case 1:
-				err := d.Del(key, db.RNone)
+				err := d.Delete(key)
 				if _, ok := m[string(key)]; ok != (err == nil) {
 					return d, fmt.Errorf("op %d del: %v, in model %v", i/3, err, ok)
 				}
 				delete(m, string(key))
 			case 2:
-				got, err := d.Get(key, db.RNone)
+				got, err := d.Get(key)
 				want, ok := m[string(key)]
 				if ok != (err == nil) || !bytes.Equal(got, want) {
 					return d, fmt.Errorf("op %d get: %v, in model %v", i/3, err, ok)
@@ -180,49 +191,51 @@ func Ops(d db.DB, ops []byte, reopen func(db.DB) (db.DB, error)) (db.DB, error) 
 	return d, check(d, m)
 }
 
-// Sorted returns an error unless a scan of d returns its keys in
+// Sorted returns an error unless a scan of s returns its keys in
 // ascending byte order.
-func Sorted(d db.DB) error {
+func Sorted(s Scanner) error {
 	var prev []byte
-	for flag := db.RFirst; ; flag = db.RNext {
-		k, _, err := d.Seq(nil, flag)
-		if errors.Is(err, db.ErrNotFound) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
+	var err error
+	serr := s.Scan(func(k, _ []byte) bool {
 		if prev != nil && bytes.Compare(prev, k) >= 0 {
-			return fmt.Errorf("seq: %.20q after %.20q", k, prev)
+			err = fmt.Errorf("scan: %.20q after %.20q", k, prev)
+			return false
 		}
 		prev = k
+		return true
+	})
+	if err != nil {
+		return err
 	}
+	return serr
 }
 
 // check compares all records of d with m.
-func check(d db.DB, m map[string][]byte) error {
+func check(d DB, m map[string][]byte) error {
 	for k, want := range m {
-		got, err := d.Get([]byte(k), db.RNone)
+		got, err := d.Get([]byte(k))
 		if err != nil || !bytes.Equal(got, want) {
 			return fmt.Errorf("final get %.20q: %v", k, err)
 		}
 	}
 	var seen int
-	for flag := db.RFirst; ; flag = db.RNext {
-		k, v, err := d.Seq(nil, flag)
-		if errors.Is(err, db.ErrNotFound) {
-			break
-		}
-		if err != nil {
-			return err
-		}
+	var err error
+	serr := d.Scan(func(k, v []byte) bool {
 		if want, ok := m[string(k)]; !ok || !bytes.Equal(v, want) {
-			return fmt.Errorf("seq %.20q: unexpected", k)
+			err = fmt.Errorf("scan %.20q: unexpected", k)
+			return false
 		}
 		seen++
+		return true
+	})
+	if err != nil {
+		return err
+	}
+	if serr != nil {
+		return serr
 	}
 	if seen != len(m) {
-		return fmt.Errorf("seq: got %d records, want %d", seen, len(m))
+		return fmt.Errorf("scan: got %d records, want %d", seen, len(m))
 	}
 	return nil
 }
@@ -244,14 +257,14 @@ func Expect(n int) []string {
 
 // ReadOnly checks that d refuses changes, still reads key, and closes
 // cleanly.
-func ReadOnly(d db.DB, key []byte) error {
-	if _, err := d.Put(key, []byte("x"), db.RNone); !errors.Is(err, db.ErrReadOnly) {
+func ReadOnly(d DB, key []byte) error {
+	if err := d.Put(key, []byte("x")); !errors.Is(err, db.ErrReadOnly) {
 		return fmt.Errorf("put: got %v, want %v", err, db.ErrReadOnly)
 	}
-	if err := d.Del(key, db.RNone); !errors.Is(err, db.ErrReadOnly) {
+	if err := d.Delete(key); !errors.Is(err, db.ErrReadOnly) {
 		return fmt.Errorf("del: got %v, want %v", err, db.ErrReadOnly)
 	}
-	if _, err := d.Get(key, db.RNone); err != nil {
+	if _, err := d.Get(key); err != nil {
 		return fmt.Errorf("get: %w", err)
 	}
 	if err := d.Close(); err != nil {
@@ -263,10 +276,10 @@ func ReadOnly(d db.DB, key []byte) error {
 // Concurrent runs readers of n stable keys in parallel with writers
 // adding and deleting n other keys and a scanner, returning the first
 // error.  Readers must always see the stable keys unchanged.
-func Concurrent(d db.DB, n int) error {
+func Concurrent(d DB, n int) error {
 	for i := range n {
 		k, v := Gen(i)
-		if _, err := d.Put(k, v, db.RNone); err != nil {
+		if err := d.Put(k, v); err != nil {
 			return err
 		}
 	}
@@ -277,7 +290,7 @@ func Concurrent(d db.DB, n int) error {
 			for i := range n {
 				i = (i + r*n/4) % n
 				k, want := Gen(i)
-				got, err := d.Get(k, db.RNone)
+				got, err := d.Get(k)
 				if err != nil || !bytes.Equal(got, want) {
 					errc <- fmt.Errorf("reader %d get %d: %v", r, i, err)
 					return
@@ -289,12 +302,12 @@ func Concurrent(d db.DB, n int) error {
 		wg.Go(func() {
 			for i := n + w; i < 2*n; i += 2 {
 				k, v := Gen(i)
-				if _, err := d.Put(k, v, db.RNone); err != nil {
+				if err := d.Put(k, v); err != nil {
 					errc <- fmt.Errorf("writer %d put %d: %w", w, i, err)
 					return
 				}
 				if i%3 == 0 {
-					if err := d.Del(k, db.RNone); err != nil {
+					if err := d.Delete(k); err != nil {
 						errc <- fmt.Errorf("writer %d del %d: %w", w, i, err)
 						return
 					}
@@ -303,15 +316,11 @@ func Concurrent(d db.DB, n int) error {
 		})
 	}
 	wg.Go(func() {
-		for flag := db.RFirst; ; flag = db.RNext {
-			_, _, err := d.Seq(nil, flag)
-			if errors.Is(err, db.ErrNotFound) {
-				return
-			}
-			if err != nil {
-				errc <- fmt.Errorf("seq: %w", err)
-				return
-			}
+		err := d.Scan(func(_, _ []byte) bool {
+			return true
+		})
+		if err != nil {
+			errc <- fmt.Errorf("scan: %w", err)
 		}
 	})
 	wg.Wait()

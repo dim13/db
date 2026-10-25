@@ -15,7 +15,38 @@ import (
 // DB must implement db.DB.
 var _ db.DB = (*DB)(nil)
 
-func open(t testing.TB, name string, info *Info) db.DB {
+// testDB adapts DB to dbtest.DB.
+type testDB struct{ *DB }
+
+func (t testDB) Get(key []byte) ([]byte, error) {
+	return t.DB.Get(key, db.RNone)
+}
+
+func (t testDB) Put(key, data []byte) error {
+	_, err := t.DB.Put(key, data, db.RNone)
+	return err
+}
+
+func (t testDB) Delete(key []byte) error {
+	return t.DB.Del(key, db.RNone)
+}
+
+func (t testDB) Scan(yield func(key, data []byte) bool) error {
+	for flag := db.RFirst; ; flag = db.RNext {
+		k, v, err := t.DB.Seq(nil, flag)
+		if errors.Is(err, db.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if !yield(k, v) {
+			return nil
+		}
+	}
+}
+
+func open(t testing.TB, name string, info *Info) *DB {
 	t.Helper()
 	f, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
@@ -76,16 +107,16 @@ func TestModel(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			name := filepath.Join(t.TempDir(), "test.db")
 			d := open(t, name, tc.info)
-			d, err := dbtest.Model(d, 20000, func(d db.DB) (db.DB, error) {
+			td, err := dbtest.Model(testDB{d}, 20000, func(d dbtest.DB) (dbtest.DB, error) {
 				if err := d.Close(); err != nil {
 					return nil, err
 				}
-				return open(t, name, tc.info), nil
+				return testDB{open(t, name, tc.info)}, nil
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := d.Close(); err != nil {
+			if err := td.Close(); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -97,7 +128,7 @@ func TestInMemory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := dbtest.Model(d, 10000, nil); err != nil {
+	if _, err := dbtest.Model(testDB{d}, 10000, nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -116,7 +147,7 @@ func TestLibc(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer d.Close()
-	got, err := dbtest.Dump(d, false)
+	got, err := dbtest.Dump(testDB{d}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +168,7 @@ func TestReadOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	k, _ := dbtest.Gen(1)
-	if err := dbtest.ReadOnly(d, k); err != nil {
+	if err := dbtest.ReadOnly(testDB{d}, k); err != nil {
 		t.Error(err)
 	}
 }
@@ -154,7 +185,7 @@ func TestConcurrent(t *testing.T) {
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			var d db.DB
+			var d *DB
 			if tc.file {
 				d = open(t, filepath.Join(t.TempDir(), "test.db"), tc.info)
 			} else {
@@ -163,7 +194,7 @@ func TestConcurrent(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if err := dbtest.Concurrent(d, 2000); err != nil {
+			if err := dbtest.Concurrent(testDB{d}, 2000); err != nil {
 				t.Error(err)
 			}
 			if err := d.Close(); err != nil {

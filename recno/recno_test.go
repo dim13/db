@@ -19,11 +19,42 @@ import (
 // DB must implement db.DB.
 var _ db.DB = (*DB)(nil)
 
+// testDB adapts DB to dbtest.DB.
+type testDB struct{ *DB }
+
+func (t testDB) Get(key []byte) ([]byte, error) {
+	return t.DB.Get(key, db.RNone)
+}
+
+func (t testDB) Put(key, data []byte) error {
+	_, err := t.DB.Put(key, data, db.RNone)
+	return err
+}
+
+func (t testDB) Delete(key []byte) error {
+	return t.DB.Del(key, db.RNone)
+}
+
+func (t testDB) Scan(yield func(key, data []byte) bool) error {
+	for flag := db.RFirst; ; flag = db.RNext {
+		k, v, err := t.DB.Seq(nil, flag)
+		if errors.Is(err, db.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if !yield(k, v) {
+			return nil
+		}
+	}
+}
+
 func key(n int) []byte {
 	return binary.NativeEndian.AppendUint32(nil, uint32(n))
 }
 
-func open(t *testing.T, name string, info *Info) db.DB {
+func open(t *testing.T, name string, info *Info) *DB {
 	t.Helper()
 	f, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
@@ -191,7 +222,7 @@ func TestLibc(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer d.Close()
-	got, err := dbtest.Dump(d, true)
+	got, err := dbtest.Dump(testDB{d}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +284,7 @@ func TestReadOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	k := key(1)
-	if err := dbtest.ReadOnly(d, k); err != nil {
+	if err := dbtest.ReadOnly(testDB{d}, k); err != nil {
 		t.Error(err)
 	}
 }
