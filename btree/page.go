@@ -34,10 +34,36 @@ const (
 	pBigKey              // key is in an overflow chain
 )
 
+const dataOff = 20
+
+// Encoded sizes, checked against binary.Size in tests.
 const (
-	dataOff   = 20 // header size, the index array starts here
-	novflSize = 8  // size of {pgno, size} overflow reference
+	leafHeadSize     = 9
+	internalHeadSize = 9
+	novflSize        = 8
 )
+
+// header size, the index array starts here
+
+// leafHead precedes the key and data of a leaf item.
+type leafHead struct {
+	KSize uint32
+	DSize uint32
+	Flags byte // pBigKey, pBigData
+}
+
+// internalHead precedes the key of an internal item.
+type internalHead struct {
+	KSize uint32
+	Pgno  uint32 // child page
+	Flags byte   // pBigKey
+}
+
+// ovfl references an overflow chain in place of a key or data.
+type ovfl struct {
+	Pgno uint32 // first page
+	Size uint32 // item length
+}
 
 // mpool is a page cache over a file.  Callers hold page slices during an
 // operation, so pages are only evicted by trim between operations.
@@ -80,6 +106,21 @@ type binternal struct {
 	raw   []byte
 }
 
+// decode reads h from b; it is on the search path, so no reflection.
+func (h *leafHead) decode(b []byte, o binary.ByteOrder) {
+	h.KSize, h.DSize, h.Flags = o.Uint32(b), o.Uint32(b[4:]), b[8]
+}
+
+// decode reads h from b; it is on the search path, so no reflection.
+func (h *internalHead) decode(b []byte, o binary.ByteOrder) {
+	h.KSize, h.Pgno, h.Flags = o.Uint32(b), o.Uint32(b[4:]), b[8]
+}
+
+// decode reads r from b; compares of big keys need it, so no reflection.
+func (r *ovfl) decode(b []byte, o binary.ByteOrder) {
+	r.Pgno, r.Size = o.Uint32(b), o.Uint32(b[4:])
+}
+
 // lalign rounds n up to a multiple of 4.
 func lalign(n int) int {
 	return (n + 3) &^ 3
@@ -87,12 +128,12 @@ func lalign(n int) int {
 
 // nbinternal returns the aligned size of an internal page item with key size ksize.
 func nbinternal(ksize int) int {
-	return lalign(4 + 4 + 1 + ksize)
+	return lalign(internalHeadSize + ksize)
 }
 
 // nbleafdbt returns the aligned size of a leaf item with key size ksize and data size dsize.
 func nbleafdbt(ksize, dsize int) int {
-	return lalign(4 + 4 + 1 + ksize + dsize)
+	return lalign(leafHeadSize + ksize + dsize)
 }
 
 // newMpool returns a page cache over file of size bytes, checking each
@@ -347,12 +388,14 @@ func (p page) appendItem(i int, item []byte) {
 // bleaf decodes leaf item i; key, data and raw alias the page buffer.
 func (p page) bleaf(i int) bleaf {
 	off := p.linp(i)
-	ksize, dsize := int(p.u32(off)), int(p.u32(off+4))
-	b := off + 9
+	var h leafHead
+	h.decode(p.b[off:], p.o)
+	ksize, dsize := int(h.KSize), int(h.DSize)
+	b := off + leafHeadSize
 	return bleaf{
 		ksize: ksize,
 		dsize: dsize,
-		flags: p.b[off+8],
+		flags: h.Flags,
 		key:   p.b[b : b+ksize],
 		data:  p.b[b+ksize : b+ksize+dsize],
 		raw:   p.b[off : off+nbleafdbt(ksize, dsize)],
@@ -362,19 +405,23 @@ func (p page) bleaf(i int) bleaf {
 // binternal decodes internal item i; bytes and raw alias the page buffer.
 func (p page) binternal(i int) binternal {
 	off := p.linp(i)
-	ksize := int(p.u32(off))
+	var h internalHead
+	h.decode(p.b[off:], p.o)
+	ksize := int(h.KSize)
+	b := off + internalHeadSize
 	return binternal{
 		ksize: ksize,
-		pgno:  p.u32(off + 4),
-		flags: p.b[off+8],
-		bytes: p.b[off+9 : off+9+ksize],
+		pgno:  h.Pgno,
+		flags: h.Flags,
+		bytes: p.b[b : b+ksize],
 		raw:   p.b[off : off+nbinternal(ksize)],
 	}
 }
 
 // setBinternalPgno sets the child page number of internal item i.
 func (p page) setBinternalPgno(i int, pgno uint32) {
-	p.setU32(p.linp(i)+4, pgno)
+	bi := p.binternal(i)
+	p.writeBInternal(p.linp(i), bi.ksize, pgno, bi.flags, bi.bytes)
 }
 
 // item returns raw bytes of item i, whatever page type.
@@ -390,20 +437,26 @@ func (p page) item(i int) ([]byte, error) {
 
 // writeBLeaf encodes a leaf item with key, data and flags at offset off.
 func (p page) writeBLeaf(off int, key, data []byte, flags byte) {
-	p.setU32(off, uint32(len(key)))
-	p.setU32(off+4, uint32(len(data)))
-	p.b[off+8] = flags
-	copy(p.b[off+9:], key)
-	copy(p.b[off+9+len(key):], data)
+	h := leafHead{
+		KSize: uint32(len(key)),
+		DSize: uint32(len(data)),
+		Flags: flags,
+	}
+	n, _ := binary.Encode(p.b[off:], p.o, h)
+	copy(p.b[off+n:], key)
+	copy(p.b[off+n+len(key):], data)
 }
 
 // writeBInternal encodes an internal item with the first ksize bytes of key,
 // child pgno and flags at offset off.
 func (p page) writeBInternal(off, ksize int, pgno uint32, flags byte, key []byte) {
-	p.setU32(off, uint32(ksize))
-	p.setU32(off+4, pgno)
-	p.b[off+8] = flags
-	copy(p.b[off+9:], key[:ksize])
+	h := internalHead{
+		KSize: uint32(ksize),
+		Pgno:  pgno,
+		Flags: flags,
+	}
+	n, _ := binary.Encode(p.b[off:], p.o, h)
+	copy(p.b[off+n:], key[:ksize])
 }
 
 // init sets up an empty page header.

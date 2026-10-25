@@ -375,11 +375,11 @@ func (t *DB) bnew() (uint32, page, error) {
 
 // ovflGet reads the item referenced by ref from its overflow chain.
 func (t *DB) ovflGet(ref []byte) ([]byte, error) {
-	if len(ref) < novflSize {
-		return nil, fmt.Errorf("%w: overflow reference", db.ErrFormat)
+	r, err := t.ovflRef(ref)
+	if err != nil {
+		return nil, err
 	}
-	pg := t.o.Uint32(ref)
-	sz := int(t.o.Uint32(ref[4:]))
+	pg, sz := r.Pgno, int(r.Size)
 	plen := t.psize - dataOff
 	if sz > int(t.mp.npages.Load())*plen {
 		return nil, fmt.Errorf("%w: overflow size %d", db.ErrFormat, sz)
@@ -428,19 +428,26 @@ func (t *DB) ovflPut(data []byte) ([]byte, error) {
 		}
 		last = h
 	}
-	ref := make([]byte, novflSize)
-	t.o.PutUint32(ref, first)
-	t.o.PutUint32(ref[4:], uint32(len(data)))
-	return ref, nil
+	return binary.Append(nil, t.o, ovfl{Pgno: first, Size: uint32(len(data))})
+}
+
+// ovflRef decodes the overflow reference in b.
+func (t *DB) ovflRef(b []byte) (ovfl, error) {
+	var r ovfl
+	if len(b) < novflSize {
+		return r, fmt.Errorf("%w: overflow reference", db.ErrFormat)
+	}
+	r.decode(b, t.o)
+	return r, nil
 }
 
 // ovflDelete frees the overflow chain referenced by ref.
 func (t *DB) ovflDelete(ref []byte) error {
-	if len(ref) < novflSize {
-		return fmt.Errorf("%w: overflow reference", db.ErrFormat)
+	r, err := t.ovflRef(ref)
+	if err != nil {
+		return err
 	}
-	pg := t.o.Uint32(ref)
-	sz := int(t.o.Uint32(ref[4:]))
+	pg, sz := r.Pgno, int(r.Size)
 	h, err := t.get(pg)
 	if err != nil {
 		return err
@@ -875,12 +882,18 @@ func (t *DB) checkPage(pgno uint32, b []byte) error {
 	}
 	for i := range p.nextIndex() {
 		off := p.linp(i)
-		if off < upper || off+9 > len(b) {
+		if off < upper || off+leafHeadSize > len(b) {
 			return fmt.Errorf("%w: page %d item %d", db.ErrFormat, pgno, i)
 		}
-		end := off + 9 + int(p.u32(off))
+		var end int
 		if p.isType(pBLeaf) {
-			end += int(p.u32(off + 4))
+			var h leafHead
+			h.decode(b[off:], p.o)
+			end = off + leafHeadSize + int(h.KSize) + int(h.DSize)
+		} else {
+			var h internalHead
+			h.decode(b[off:], p.o)
+			end = off + internalHeadSize + int(h.KSize)
 		}
 		if end > len(b) {
 			return fmt.Errorf("%w: page %d item %d", db.ErrFormat, pgno, i)

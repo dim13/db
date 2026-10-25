@@ -99,7 +99,7 @@ func (t *DB) split(sp page, key, data []byte, flags byte, ilen, skip int) (at ep
 			h.setLinp(skip, h.upper())
 			h.writeBInternal(h.upper(), ksize, rchild.pgno(), bl.flags&pBigKey, bl.key)
 			if bl.flags&pBigKey != 0 {
-				if err := t.preserve(t.o.Uint32(bl.key)); err != nil {
+				if err := t.preserve(bl.key); err != nil {
 					return at, err
 				}
 			}
@@ -205,7 +205,7 @@ func (t *DB) broot(h, l, r page) error {
 		// The overflow key is now shared with the root; it must outlive
 		// the leaf record.
 		if bl.flags&pBigKey != 0 {
-			if err := t.preserve(t.o.Uint32(bl.key)); err != nil {
+			if err := t.preserve(bl.key); err != nil {
 				return err
 			}
 		}
@@ -344,10 +344,14 @@ func (p page) isBigKey(i int) bool {
 	return false
 }
 
-// preserve flags overflow chain pg as referenced by an internal page, so
-// ovflDelete leaves it alone.
-func (t *DB) preserve(pg uint32) error {
-	h, err := t.get(pg)
+// preserve flags the overflow chain behind ref as referenced by an
+// internal page, so ovflDelete leaves it alone.
+func (t *DB) preserve(ref []byte) error {
+	r, err := t.ovflRef(ref)
+	if err != nil {
+		return err
+	}
+	h, err := t.get(r.Pgno)
 	if err != nil {
 		return err
 	}
