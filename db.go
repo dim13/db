@@ -1,45 +1,4 @@
-// Package db defines the interfaces, routine flags and errors shared by
-// the Berkeley DB 1.85 access methods in packages btree, hash and recno,
-// and the ndbm interface in package ndbm.
+// Package db defines the Storage interface and the errors shared by the
+// Berkeley DB 1.85 access methods in packages btree, hash and recno,
+// and by ndbm and hsearch built on them.
 package db
-
-// Flag selects the operation of a DB method, values as in C.
-type Flag uint
-
-// Routine flags
-const (
-	RNone        Flag = iota // no flag
-	RCursor                  // del, put, seq
-	_                        // unused
-	RFirst                   // seq
-	RIAfter                  // put (recno)
-	RIBefore                 // put (recno)
-	RLast                    // seq (btree, recno)
-	RNext                    // seq
-	RNoOverwrite             // put
-	RPrev                    // seq (btree, recno)
-	RSetCursor               // put (recno)
-	RRecnoSync               // sync (recno)
-)
-
-// DB is an open database, the counterpart of the C DB handle.
-// Implementations are safe for concurrent use: Get calls run in
-// parallel, other methods one at a time; Seq has a single cursor shared
-// by all callers.
-type DB interface {
-	// Close syncs the database, it leaves the files open.
-	Close() (err error)
-	// Del deletes key, or with RCursor the entry at the cursor.
-	Del(key []byte, flag Flag) (err error)
-	// Get returns the data stored under key, or ErrNotFound.
-	Get(key []byte, flag Flag) (data []byte, err error)
-	// Put stores data under key and returns the key it is stored under,
-	// which differs from key only for recno insertions.
-	Put(key []byte, data []byte, flag Flag) (rkey []byte, err error)
-	// Sync writes all changes to disk.
-	Sync(flag Flag) (err error)
-	// Seq returns the next key/data pair of a sequential scan, or
-	// ErrNotFound at its end.  RFirst, RLast and RCursor start a scan,
-	// RNext and RPrev continue it.
-	Seq(key []byte, flag Flag) (rkey []byte, data []byte, err error)
-}

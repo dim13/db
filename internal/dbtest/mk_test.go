@@ -6,130 +6,50 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/dim13/db"
 	"github.com/dim13/db/btree"
 	"github.com/dim13/db/hash"
 	"github.com/dim13/db/internal/dbtest"
 	"github.com/dim13/db/recno"
 )
 
-// btreeDB gives btree the db.DB flag API.
-type btreeDB struct {
-	*btree.DB
-	c *btree.Cursor
+// handle is what TestMk needs of a database; put stores the i-th pair.
+type handle struct {
+	put   func(i int, k, v []byte) error
+	del   func(k []byte) error
+	close func() error
 }
 
-func (b btreeDB) Put(k, v []byte, _ db.Flag) ([]byte, error) { return k, b.DB.Put(k, v) }
-func (b btreeDB) Get(k []byte, _ db.Flag) ([]byte, error)    { return b.DB.Get(k) }
-func (b btreeDB) Del(k []byte, _ db.Flag) error              { return b.DB.Delete(k) }
-func (b btreeDB) Sync(db.Flag) error                         { return b.DB.Sync() }
-
-func (b btreeDB) Seq(k []byte, flag db.Flag) ([]byte, []byte, error) {
-	var ok bool
-	switch flag {
-	case db.RCursor:
-		ok = b.c.Seek(k)
-	case db.RFirst:
-		ok = b.c.First()
-	case db.RLast:
-		ok = b.c.Last()
-	case db.RNext:
-		ok = b.c.Next()
-	case db.RPrev:
-		ok = b.c.Prev()
-	default:
-		return nil, nil, db.ErrInvalid
-	}
-	if !ok {
-		if err := b.c.Err(); err != nil {
-			return nil, nil, err
-		}
-		return nil, nil, db.ErrNotFound
-	}
-	return b.c.Key(), b.c.Data(), nil
-}
-
-// hashDB gives hash the db.DB flag API.
-type hashDB struct {
-	*hash.DB
-	c *hash.Cursor
-}
-
-func (h hashDB) Put(k, v []byte, _ db.Flag) ([]byte, error) { return k, h.DB.Put(k, v) }
-func (h hashDB) Get(k []byte, _ db.Flag) ([]byte, error)    { return h.DB.Get(k) }
-func (h hashDB) Del(k []byte, _ db.Flag) error              { return h.DB.Delete(k) }
-func (h hashDB) Sync(db.Flag) error                         { return h.DB.Sync() }
-
-func (h hashDB) Seq(_ []byte, flag db.Flag) ([]byte, []byte, error) {
-	var ok bool
-	switch flag {
-	case db.RFirst:
-		ok = h.c.First()
-	case db.RNext:
-		ok = h.c.Next()
-	default:
-		return nil, nil, db.ErrInvalid
-	}
-	if !ok {
-		if err := h.c.Err(); err != nil {
-			return nil, nil, err
-		}
-		return nil, nil, db.ErrNotFound
-	}
-	return h.c.Key(), h.c.Data(), nil
-}
-
-// recnoDB gives recno the db.DB flag API with 4-byte native-endian keys.
-type recnoDB struct {
-	*recno.DB
-	c *recno.Cursor
-}
-
-func num(k []byte) int {
-	if len(k) != 4 {
-		return 0
-	}
-	return int(binary.NativeEndian.Uint32(k))
-}
-
-func (r recnoDB) Put(k, v []byte, _ db.Flag) ([]byte, error) { return k, r.DB.Put(num(k), v) }
-func (r recnoDB) Get(k []byte, _ db.Flag) ([]byte, error)    { return r.DB.Get(num(k)) }
-func (r recnoDB) Del(k []byte, _ db.Flag) error              { return r.DB.Delete(num(k)) }
-func (r recnoDB) Sync(db.Flag) error                         { return r.DB.Sync() }
-
-func (r recnoDB) Seq(_ []byte, flag db.Flag) ([]byte, []byte, error) {
-	var ok bool
-	switch flag {
-	case db.RFirst:
-		ok = r.c.First()
-	case db.RNext:
-		ok = r.c.Next()
-	default:
-		return nil, nil, db.ErrInvalid
-	}
-	if !ok {
-		if err := r.c.Err(); err != nil {
-			return nil, nil, err
-		}
-		return nil, nil, db.ErrNotFound
-	}
-	return binary.NativeEndian.AppendUint32(nil, uint32(r.c.Num())), r.c.Data(), nil
-}
-
-func newHash(f *os.File, i *hash.Info) (db.DB, error) {
+func newHash(f *os.File, i *hash.Info) (handle, error) {
 	d, err := hash.New(f, i)
 	if err != nil {
-		return nil, err
+		return handle{}, err
 	}
-	return hashDB{DB: d, c: d.Cursor()}, nil
+	put := func(_ int, k, v []byte) error {
+		return d.Put(k, v)
+	}
+	return handle{put, d.Delete, d.Close}, nil
 }
 
-func newBtree(f *os.File, i *btree.Info) (db.DB, error) {
+func newBtree(f *os.File, i *btree.Info) (handle, error) {
 	d, err := btree.New(f, i)
 	if err != nil {
-		return nil, err
+		return handle{}, err
 	}
-	return btreeDB{DB: d, c: d.Cursor()}, nil
+	put := func(_ int, k, v []byte) error {
+		return d.Put(k, v)
+	}
+	return handle{put, d.Delete, d.Close}, nil
+}
+
+func newRecno(f *os.File, i *recno.Info) (handle, error) {
+	d, err := recno.New(f, i)
+	if err != nil {
+		return handle{}, err
+	}
+	put := func(i int, _, v []byte) error {
+		return d.Put(i+1, v[:len(v)%200])
+	}
+	return handle{put: put, close: d.Close}, nil
 }
 
 func TestMk(t *testing.T) {
@@ -137,32 +57,26 @@ func TestMk(t *testing.T) {
 	if dir == "" {
 		t.Skip()
 	}
-	open := map[string]func(*os.File) (db.DB, error){
-		"btree": func(f *os.File) (db.DB, error) { return newBtree(f, nil) },
-		"hash":  func(f *os.File) (db.DB, error) { return newHash(f, nil) },
-		"recno": func(f *os.File) (db.DB, error) {
-			d, err := recno.New(f, nil)
-			if err != nil {
-				return nil, err
-			}
-			return recnoDB{DB: d, c: d.Cursor()}, nil
-		},
-		"btree512": func(f *os.File) (db.DB, error) {
+	open := map[string]func(*os.File) (handle, error){
+		"btree": func(f *os.File) (handle, error) { return newBtree(f, nil) },
+		"hash":  func(f *os.File) (handle, error) { return newHash(f, nil) },
+		"recno": func(f *os.File) (handle, error) { return newRecno(f, nil) },
+		"btree512": func(f *os.File) (handle, error) {
 			return newBtree(f, &btree.Info{PageSize: 512})
 		},
-		"btreebe": func(f *os.File) (db.DB, error) {
+		"btreebe": func(f *os.File) (handle, error) {
 			return newBtree(f, &btree.Info{ByteOrder: binary.BigEndian})
 		},
-		"hash256": func(f *os.File) (db.DB, error) {
+		"hash256": func(f *os.File) (handle, error) {
 			return newHash(f, &hash.Info{BucketSize: 256})
 		},
-		"hashbe": func(f *os.File) (db.DB, error) {
+		"hashbe": func(f *os.File) (handle, error) {
 			return newHash(f, &hash.Info{ByteOrder: binary.BigEndian})
 		},
-		"btree512be": func(f *os.File) (db.DB, error) {
+		"btree512be": func(f *os.File) (handle, error) {
 			return newBtree(f, &btree.Info{PageSize: 512, ByteOrder: binary.BigEndian})
 		},
-		"hash256le": func(f *os.File) (db.DB, error) {
+		"hash256le": func(f *os.File) (handle, error) {
 			return newHash(f, &hash.Info{BucketSize: 256, ByteOrder: binary.LittleEndian})
 		},
 	}
@@ -174,21 +88,17 @@ func TestMk(t *testing.T) {
 		}
 		for i := range 3000 {
 			k, v := dbtest.Gen(i)
-			if name == "recno" {
-				k = binary.NativeEndian.AppendUint32(nil, uint32(i+1))
-				v = v[:len(v)%200]
-			}
-			if _, err := d.Put(k, v, db.RNone); err != nil {
+			if err := d.put(i, k, v); err != nil {
 				t.Fatal(name, i, err)
 			}
 		}
-		for i := 0; name != "recno" && i < 3000; i += 5 {
+		for i := 0; d.del != nil && i < 3000; i += 5 {
 			k, _ := dbtest.Gen(i)
-			if err := d.Del(k, db.RNone); err != nil {
+			if err := d.del(k); err != nil {
 				t.Fatal(name, i, err)
 			}
 		}
-		if err := d.Close(); err != nil {
+		if err := d.close(); err != nil {
 			t.Fatal(err)
 		}
 		if err := f.Close(); err != nil {

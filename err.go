@@ -8,7 +8,7 @@ import (
 // Errors returned by the access methods, to be checked with errors.Is.
 var (
 	ErrNotFound = errors.New("not found")      // key not found or no more keys
-	ErrKeyExist = errors.New("key exists")     // put with RNoOverwrite
+	ErrKeyExist = errors.New("key exists")     // PutNew of an existing key
 	ErrInvalid  = errors.New("invalid")        // bad argument
 	ErrReadOnly = errors.New("read only")      // change to read-only database
 	ErrFormat   = errors.New("invalid format") // not a database file
