@@ -16,21 +16,12 @@ import (
 	"github.com/dim13/db"
 )
 
-// File is a flat file of records that can be written back.
-type File interface {
-	db.Storage
-	Truncate(size int64) error
-}
-
 // search operations
 const (
 	sDelete = iota
 	sInsert
 	sSearch
 )
-
-// putMode selects how put stores a record.
-type putMode int
 
 const (
 	putReplace putMode = iota // replace or create the record
@@ -40,6 +31,15 @@ const (
 	putAppend                 // store after the last record
 	putCursor                 // replace the record, ErrNotFound if it is gone
 )
+
+// File is a flat file of records that can be written back.
+type File interface {
+	db.Storage
+	Truncate(size int64) error
+}
+
+// putMode selects how put stores a record.
+type putMode int
 
 // Info holds options for New.  Zero fields and a nil Info select defaults.
 type Info struct {

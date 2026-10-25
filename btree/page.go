@@ -39,21 +39,6 @@ const (
 	novflSize = 8  // size of {pgno, size} overflow reference
 )
 
-// lalign rounds n up to a multiple of 4.
-func lalign(n int) int {
-	return (n + 3) &^ 3
-}
-
-// nbinternal returns the aligned size of an internal page item with key size ksize.
-func nbinternal(ksize int) int {
-	return lalign(4 + 4 + 1 + ksize)
-}
-
-// nbleafdbt returns the aligned size of a leaf item with key size ksize and data size dsize.
-func nbleafdbt(ksize, dsize int) int {
-	return lalign(4 + 4 + 1 + ksize + dsize)
-}
-
 // mpool is a page cache over a file.  Callers hold page slices during an
 // operation, so pages are only evicted by trim between operations.
 type mpool struct {
@@ -70,6 +55,44 @@ type cpage struct {
 	pgno uint32
 	b    []byte
 	mod  bool
+}
+
+// page is a view on a tree page.
+type page struct {
+	b []byte
+	o binary.ByteOrder
+}
+
+// bleaf is a decoded btree leaf item.
+type bleaf struct {
+	ksize, dsize int
+	flags        byte
+	key, data    []byte
+	raw          []byte // whole item
+}
+
+// binternal is a decoded btree internal item: separator key and child page.
+type binternal struct {
+	ksize int
+	pgno  uint32
+	flags byte
+	bytes []byte
+	raw   []byte
+}
+
+// lalign rounds n up to a multiple of 4.
+func lalign(n int) int {
+	return (n + 3) &^ 3
+}
+
+// nbinternal returns the aligned size of an internal page item with key size ksize.
+func nbinternal(ksize int) int {
+	return lalign(4 + 4 + 1 + ksize)
+}
+
+// nbleafdbt returns the aligned size of a leaf item with key size ksize and data size dsize.
+func nbleafdbt(ksize, dsize int) int {
+	return lalign(4 + 4 + 1 + ksize + dsize)
 }
 
 // newMpool returns a page cache over file of size bytes, checking each
@@ -175,12 +198,6 @@ func (m *mpool) trim() error {
 		}
 		return true, m.write(p)
 	})
-}
-
-// page is a view on a tree page.
-type page struct {
-	b []byte
-	o binary.ByteOrder
 }
 
 // u16 returns the 16-bit value at offset off.
@@ -327,14 +344,6 @@ func (p page) appendItem(i int, item []byte) {
 	copy(p.b[p.upper():], item)
 }
 
-// bleaf is a decoded btree leaf item.
-type bleaf struct {
-	ksize, dsize int
-	flags        byte
-	key, data    []byte
-	raw          []byte // whole item
-}
-
 // bleaf decodes leaf item i; key, data and raw alias the page buffer.
 func (p page) bleaf(i int) bleaf {
 	off := p.linp(i)
@@ -348,15 +357,6 @@ func (p page) bleaf(i int) bleaf {
 		data:  p.b[b+ksize : b+ksize+dsize],
 		raw:   p.b[off : off+nbleafdbt(ksize, dsize)],
 	}
-}
-
-// binternal is a decoded btree internal item: separator key and child page.
-type binternal struct {
-	ksize int
-	pgno  uint32
-	flags byte
-	bytes []byte
-	raw   []byte
 }
 
 // binternal decodes internal item i; bytes and raw alias the page buffer.

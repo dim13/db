@@ -11,6 +11,24 @@ import (
 	"iter"
 )
 
+// Store modes
+const (
+	DBMInsert  Mode = iota // keep existing data, return ErrKeyExist
+	DBMReplace             // overwrite existing data
+)
+
+// Errors returned by the access methods, to be checked with errors.Is.
+var (
+	ErrNotFound = errors.New("not found")      // key not found or no more keys
+	ErrKeyExist = errors.New("key exists")     // PutNew of an existing key
+	ErrInvalid  = errors.New("invalid")        // bad argument
+	ErrReadOnly = errors.New("read only")      // change to read-only database
+	ErrFormat   = errors.New("invalid format") // not a database file
+	ErrOverflow = errors.New("out of overflow pages, increase page size")
+	ErrNoPage   = fmt.Errorf("%w: no such page", ErrFormat) // link past end of file
+	ErrPageType = fmt.Errorf("%w: page type", ErrFormat)    // unexpected page type
+)
+
 // Storage is the file a database lives in, an *os.File for instance.  The
 // database never closes it, that is left to the caller.
 type Storage interface {
@@ -42,12 +60,6 @@ type DB[K any] interface {
 // Mode selects what DBM.Store does with an existing key.
 type Mode int
 
-// Store modes
-const (
-	DBMInsert  Mode = iota // keep existing data, return ErrKeyExist
-	DBMReplace             // overwrite existing data
-)
-
 // DBM is an open ndbm database, the counterpart of the C DBM handle.
 // Implementations are safe for concurrent use; FirstKey and NextKey share
 // a single cursor.
@@ -73,15 +85,3 @@ type DBM interface {
 	// Close writes changes and closes the file.
 	Close() error
 }
-
-// Errors returned by the access methods, to be checked with errors.Is.
-var (
-	ErrNotFound = errors.New("not found")      // key not found or no more keys
-	ErrKeyExist = errors.New("key exists")     // PutNew of an existing key
-	ErrInvalid  = errors.New("invalid")        // bad argument
-	ErrReadOnly = errors.New("read only")      // change to read-only database
-	ErrFormat   = errors.New("invalid format") // not a database file
-	ErrOverflow = errors.New("out of overflow pages, increase page size")
-	ErrNoPage   = fmt.Errorf("%w: no such page", ErrFormat) // link past end of file
-	ErrPageType = fmt.Errorf("%w: page type", ErrFormat)    // unexpected page type
-)

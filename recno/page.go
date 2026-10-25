@@ -39,16 +39,6 @@ const (
 	nrInternal = 8  // size of a recno internal item
 )
 
-// lalign rounds n up to a multiple of 4.
-func lalign(n int) int {
-	return (n + 3) &^ 3
-}
-
-// nrleafdbt returns the aligned size of a recno leaf item holding dsize data bytes.
-func nrleafdbt(dsize int) int {
-	return lalign(4 + 1 + dsize)
-}
-
 // mpool is a page cache over a file.  Callers hold page slices during an
 // operation, so pages are only evicted by trim between operations.
 type mpool struct {
@@ -65,6 +55,36 @@ type cpage struct {
 	pgno uint32
 	b    []byte
 	mod  bool
+}
+
+// page is a view on a tree page.
+type page struct {
+	b []byte
+	o binary.ByteOrder
+}
+
+// rinternal is a decoded recno internal item: record count and child page.
+type rinternal struct {
+	nrecs uint32
+	pgno  uint32
+}
+
+// rleaf is a decoded recno leaf item.
+type rleaf struct {
+	dsize int
+	flags byte
+	data  []byte
+	raw   []byte
+}
+
+// lalign rounds n up to a multiple of 4.
+func lalign(n int) int {
+	return (n + 3) &^ 3
+}
+
+// nrleafdbt returns the aligned size of a recno leaf item holding dsize data bytes.
+func nrleafdbt(dsize int) int {
+	return lalign(4 + 1 + dsize)
 }
 
 // newMpool returns a page cache over file of size bytes, checking each
@@ -170,12 +190,6 @@ func (m *mpool) trim() error {
 		}
 		return true, m.write(p)
 	})
-}
-
-// page is a view on a tree page.
-type page struct {
-	b []byte
-	o binary.ByteOrder
 }
 
 // u16 returns the 16-bit value at off.
@@ -322,12 +336,6 @@ func (p page) appendItem(i int, item []byte) {
 	copy(p.b[p.upper():], item)
 }
 
-// rinternal is a decoded recno internal item: record count and child page.
-type rinternal struct {
-	nrecs uint32
-	pgno  uint32
-}
-
 // rinternal decodes recno internal item i.
 func (p page) rinternal(i int) rinternal {
 	off := p.linp(i)
@@ -342,14 +350,6 @@ func (p page) setRinternal(i int, nrecs, pgno uint32) {
 	off := p.linp(i)
 	p.setU32(off, nrecs)
 	p.setU32(off+4, pgno)
-}
-
-// rleaf is a decoded recno leaf item.
-type rleaf struct {
-	dsize int
-	flags byte
-	data  []byte
-	raw   []byte
 }
 
 // rleaf decodes recno leaf item i; its data and raw slices alias the page.

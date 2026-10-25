@@ -91,12 +91,6 @@ type cursor struct {
 	flags flags.Set[uint8]
 }
 
-// on reports if the cursor sits on record index of page pgno.
-func (c *cursor) on(pgno uint32, index int) bool {
-	return c.flags.IsSet(cursInit) && c.flags.IsClr(cursAcquire) &&
-		c.pg.pgno == pgno && c.pg.index == index
-}
-
 // DB is an open B-Tree database, safe for concurrent use: Get calls run in
 // parallel, other methods one at a time.
 type DB struct {
@@ -117,6 +111,12 @@ type DB struct {
 	pfx      func(a, b []byte) int
 	flags    flags.Set[uint32]
 	nrecs    uint32 // meta-data, preserved
+}
+
+// on reports if the cursor sits on record index of page pgno.
+func (c *cursor) on(pgno uint32, index int) bool {
+	return c.flags.IsSet(cursInit) && c.flags.IsClr(cursAcquire) &&
+		c.pg.pgno == pgno && c.pg.index == index
 }
 
 // validPSize reports whether n is an even page size within [minPSize, maxPSize].

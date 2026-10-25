@@ -7,6 +7,12 @@ import (
 	"github.com/dim13/db"
 )
 
+// splitReturn holds the pages bigSplit leaves in use for the old and new
+// buckets, and the next overflow page to continue splitting from.
+type splitReturn struct {
+	newp, oldp, nextp *buf
+}
+
 // next returns the overflow page referenced by the last entry pair of bufp.
 func (h *DB) next(bufp *buf) (*buf, error) {
 	bp := h.page(bufp.page)
@@ -302,12 +308,6 @@ func (h *DB) bigKeydata(bufp *buf, c *cursor) ([]byte, []byte, error) {
 			return nil, nil, err
 		}
 	}
-}
-
-// splitReturn holds the pages bigSplit leaves in use for the old and new
-// buckets, and the next overflow page to continue splitting from.
-type splitReturn struct {
-	newp, oldp, nextp *buf
 }
 
 // bigSplit moves the big pair at bigKeyp to op or np.

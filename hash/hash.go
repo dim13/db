@@ -56,6 +56,19 @@ const (
 	ovflSize    = 2 * 2
 )
 
+// Byte orders as stored in header
+const (
+	littleEndian = 1234
+	bigEndian    = 4321
+)
+
+const (
+	actionGet = iota
+	actionPut
+	actionPutNew
+	actionDelete
+)
+
 // header is the table metadata at the start of the file, always big endian.
 type header struct {
 	Magic     int32           // identifies a hash file
@@ -90,14 +103,6 @@ type Info struct {
 	ReadOnly   bool               // refuse changes, never write
 }
 
-// bufKey returns the cache key of a bucket or overflow page address.
-func bufKey(addr int, bucket bool) int {
-	if bucket {
-		return addr<<1 | 1
-	}
-	return addr << 1
-}
-
 // buf is a cached bucket or overflow page.
 type buf struct {
 	addr   int    // bucket number or overflow address
@@ -126,11 +131,13 @@ type DB struct {
 	cursors []*cursor // open cursors
 }
 
-// Byte orders as stored in header
-const (
-	littleEndian = 1234
-	bigEndian    = 4321
-)
+// bufKey returns the cache key of a bucket or overflow page address.
+func bufKey(addr int, bucket bool) int {
+	if bucket {
+		return addr<<1 | 1
+	}
+	return addr << 1
+}
 
 // New opens a hash table backed by file, or an in-memory table if file is
 // nil.  An empty file is initialized as a new table.  Changes are kept in
@@ -537,13 +544,6 @@ func (h *DB) write(action int, key, data []byte) (err error) {
 	_, err = h.access(action, key, data)
 	return err
 }
-
-const (
-	actionGet = iota
-	actionPut
-	actionPutNew
-	actionDelete
-)
 
 // access looks up key and performs action on it, returning the data for
 // actionGet; it returns ErrNotFound or ErrKeyExist as appropriate.
