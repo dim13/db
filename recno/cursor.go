@@ -84,12 +84,13 @@ func (c *Cursor) Num() int     { return c.n }
 func (c *Cursor) Data() []byte { return c.data }
 func (c *Cursor) Err() error   { return c.err }
 
-// Put replaces the record at the cursor.
+// Put replaces the record at the cursor, or returns ErrNotFound if deletes
+// moved it past the last record.
 func (c *Cursor) Put(data []byte) error {
 	if c.r == nil || c.n == 0 || c.deleted {
 		return db.ErrInvalid
 	}
-	if err := c.r.Put(c.n, data); err != nil {
+	if _, err := c.r.put(c.n, data, putCursor); err != nil {
 		return err
 	}
 	c.data = slices.Clone(data)
@@ -169,16 +170,17 @@ func (r *DB) move(f func(*tree) (int, error)) (n int, data []byte, err error) {
 	if n, err = f(t); err != nil {
 		return 0, nil, err
 	}
-	if n < 1 || n > math.MaxUint32 {
+	nrec, err := num(n)
+	if err != nil {
 		return 0, nil, db.ErrNotFound
 	}
-	if err := t.load(uint32(n)); err != nil {
+	if err := t.load(nrec); err != nil {
 		return 0, nil, err
 	}
-	if n > int(t.nrecs) {
+	if nrec > t.nrecs {
 		return 0, nil, db.ErrNotFound
 	}
-	e, err := t.search(uint32(n-1), sSearch)
+	e, err := t.search(nrec-1, sSearch)
 	if err != nil {
 		return 0, nil, err
 	}

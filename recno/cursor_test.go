@@ -167,6 +167,26 @@ func TestCursorShift(t *testing.T) {
 	}
 }
 
+func TestCursorPutGone(t *testing.T) {
+	d := fill(t, 5)
+	c := d.Cursor()
+	defer c.Close()
+	if !c.Seek(5) {
+		t.Fatal("seek 5:", c.Err())
+	}
+	for range 3 {
+		if err := d.Delete(1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.Put([]byte("x")); !errors.Is(err, db.ErrNotFound) {
+		t.Errorf("got %v, want %v", err, db.ErrNotFound)
+	}
+	if got := len(dump(t, d)); got != 2 {
+		t.Errorf("got %d records, want 2", got)
+	}
+}
+
 func TestCursorDelete(t *testing.T) {
 	d := fill(t, 5)
 	c := d.Cursor()

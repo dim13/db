@@ -38,6 +38,7 @@ const (
 	putBefore                 // insert before the record
 	putAfter                  // insert after the record
 	putAppend                 // store after the last record
+	putCursor                 // replace the record, ErrNotFound if it is gone
 )
 
 // Info holds options for New.  Zero fields and a nil Info select defaults.
@@ -142,7 +143,7 @@ func New(r io.Reader, info *Info) (*DB, error) {
 
 // num converts record number n, or returns db.ErrInvalid.
 func num(n int) (uint32, error) {
-	if n < 1 || n > math.MaxUint32 {
+	if n < 1 || uint64(n) > math.MaxUint32 {
 		return 0, db.ErrInvalid
 	}
 	return uint32(n), nil
@@ -273,8 +274,11 @@ func (r *DB) put(n int, data []byte, mode putMode) (_ int, err error) {
 		if err := t.load(nrec); err != nil {
 			return 0, err
 		}
-		if mode == putNew && nrec <= t.nrecs {
+		switch {
+		case mode == putNew && nrec <= t.nrecs:
 			return 0, db.ErrKeyExist
+		case mode == putCursor && nrec > t.nrecs:
+			return 0, db.ErrNotFound
 		}
 	}
 
