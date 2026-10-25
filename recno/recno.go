@@ -169,10 +169,7 @@ func (r *DB) Close() error {
 	t := r.t
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if err := r.sync(); err != nil {
-		return err
-	}
-	return t.close()
+	return r.sync()
 }
 
 // Get returns record n, or ErrNotFound.

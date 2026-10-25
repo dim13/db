@@ -195,11 +195,6 @@ func (t *tree) pop() (epgno, bool) {
 	return e, true
 }
 
-// close syncs the tree.
-func (t *tree) close() error {
-	return t.sync()
-}
-
 // done trims the page cache after an operation, keeping the first error.
 func (t *tree) done(err *error) {
 	if terr := t.mp.trim(); *err == nil {
