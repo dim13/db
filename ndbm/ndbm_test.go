@@ -10,9 +10,6 @@ import (
 	"github.com/dim13/db"
 )
 
-// DBM must implement db.DBM; nothing else checks it.
-var _ db.DBM = (*DBM)(nil)
-
 func TestDBM(t *testing.T) {
 	name := filepath.Join(t.TempDir(), "test")
 	d, err := Open(name, os.O_RDWR|os.O_CREATE, 0644)
@@ -20,14 +17,14 @@ func TestDBM(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, k := range []string{"a", "b", "c"} {
-		if err := d.Store([]byte(k), []byte(k+k), db.DBMInsert); err != nil {
+		if err := d.Store([]byte(k), []byte(k+k), Insert); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := d.Store([]byte("a"), []byte("x"), db.DBMInsert); !errors.Is(err, db.ErrKeyExist) {
+	if err := d.Store([]byte("a"), []byte("x"), Insert); !errors.Is(err, db.ErrKeyExist) {
 		t.Errorf("insert: got %v, want %v", err, db.ErrKeyExist)
 	}
-	if err := d.Store([]byte("b"), []byte("x"), db.DBMReplace); err != nil {
+	if err := d.Store([]byte("b"), []byte("x"), Replace); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.Delete([]byte("c")); err != nil {
@@ -68,7 +65,7 @@ func TestDBM(t *testing.T) {
 	if got, want := keys, []string{"a", "b"}; !slices.Equal(got, want) {
 		t.Errorf("keys: got %q, want %q", got, want)
 	}
-	if err := d.Store([]byte("d"), nil, db.DBMInsert); !errors.Is(err, db.ErrReadOnly) {
+	if err := d.Store([]byte("d"), nil, Insert); !errors.Is(err, db.ErrReadOnly) {
 		t.Errorf("store read-only: got %v, want %v", err, db.ErrReadOnly)
 	}
 }
@@ -77,5 +74,33 @@ func TestOpenWriteOnly(t *testing.T) {
 	_, err := Open(filepath.Join(t.TempDir(), "test"), os.O_WRONLY|os.O_CREATE, 0644)
 	if !errors.Is(err, db.ErrInvalid) {
 		t.Errorf("got %v, want %v", err, db.ErrInvalid)
+	}
+}
+
+func TestAll(t *testing.T) {
+	d, err := Open(filepath.Join(t.TempDir(), "test"), os.O_RDWR|os.O_CREATE, 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	want := []string{"a", "b", "c"}
+	for _, k := range want {
+		if err := d.Store([]byte(k), []byte(k+k), Insert); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var keys []string
+	for k, v := range d.All() {
+		if string(v) != string(k)+string(k) {
+			t.Errorf("%q: got %q", k, v)
+		}
+		keys = append(keys, string(k))
+	}
+	if err := d.Err(); err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(keys)
+	if !slices.Equal(keys, want) {
+		t.Errorf("got %q, want %q", keys, want)
 	}
 }

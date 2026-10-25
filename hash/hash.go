@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"slices"
 	"sync"
 
 	"github.com/dim13/db"
@@ -106,8 +107,7 @@ type buf struct {
 }
 
 // DB is an open hash database, safe for concurrent use: Get calls run in
-// parallel, other methods one at a time; Seq has a single cursor shared
-// by all callers.
+// parallel, other methods one at a time.
 type DB struct {
 	file db.Storage
 	o    binary.ByteOrder
@@ -123,10 +123,7 @@ type DB struct {
 	mu    sync.RWMutex         // Get reads, everything else writes
 	cache lru.Cache[int, *buf] // trimmed between operations, callers hold buffers during one
 
-	// Seq position: page, bucket and entry index.
-	cpage   *buf
-	cbucket int
-	cndx    int
+	cursors []*cursor // open cursors
 }
 
 // Byte orders as stored in header
@@ -141,9 +138,8 @@ const (
 // leaves file open.
 func New(file db.Storage, info *Info) (*DB, error) {
 	h := &DB{
-		file:    file,
-		hash:    newTorek,
-		cbucket: -1,
+		file: file,
+		hash: newTorek,
 	}
 	cache := defCacheSize
 	if info != nil {
@@ -286,13 +282,10 @@ func (h *DB) Close() error {
 	return h.sync()
 }
 
-// Sync writes all changes to disk, flag must be db.RNone.
-func (h *DB) Sync(flag db.Flag) error {
+// Sync writes all changes to disk.
+func (h *DB) Sync() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if flag != db.RNone {
-		return db.ErrInvalid
-	}
 	return h.sync()
 }
 
@@ -466,11 +459,11 @@ func (h *DB) getBuf(addr int, prev *buf, newpage bool) (*buf, error) {
 }
 
 // trim evicts least recently used buffers down to the limit, writing
-// modified ones.  The scan cursor's page stays, Seq holds it across calls.
+// modified ones.  Pages of open cursors stay, they hold them across calls.
 func (h *DB) trim() error {
 	return h.cache.Trim(func(b *buf) (bool, error) {
 		switch {
-		case b == h.cpage:
+		case slices.ContainsFunc(h.cursors, func(c *cursor) bool { return c.page == b }):
 			return false, nil
 		case !b.mod:
 			return true, nil
@@ -512,51 +505,36 @@ func (h *DB) callHash(key []byte) int {
 }
 
 // Get returns the data stored under key, or ErrNotFound.
-func (h *DB) Get(key []byte, flag db.Flag) (data []byte, err error) {
+func (h *DB) Get(key []byte) (data []byte, err error) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	defer h.done(&err)
-	if flag != db.RNone {
-		return nil, db.ErrInvalid
-	}
 	return h.access(actionGet, key, nil)
 }
 
-// Put stores data under key, replacing an existing entry, and returns
-// key.  With RNoOverwrite it returns ErrKeyExist instead of replacing.
-func (h *DB) Put(key, data []byte, flag db.Flag) (rkey []byte, err error) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	defer h.done(&err)
-	if h.readOnly {
-		return nil, db.ErrReadOnly
-	}
-	act := actionPut
-	switch flag {
-	case db.RNone:
-	case db.RNoOverwrite:
-		act = actionPutNew
-	default:
-		return nil, db.ErrInvalid
-	}
-	if _, err := h.access(act, key, data); err != nil {
-		return nil, err
-	}
-	return key, nil
+// Put stores data under key, replacing an existing entry.
+func (h *DB) Put(key, data []byte) error {
+	return h.write(actionPut, key, data)
 }
 
-// Del deletes key.  RCursor is accepted, as in C, and deletes key too.
-func (h *DB) Del(key []byte, flag db.Flag) (err error) {
+// PutNew stores data under key, or returns ErrKeyExist if key exists.
+func (h *DB) PutNew(key, data []byte) error {
+	return h.write(actionPutNew, key, data)
+}
+
+// Delete deletes key, or returns ErrNotFound.
+func (h *DB) Delete(key []byte) error {
+	return h.write(actionDelete, key, nil)
+}
+
+func (h *DB) write(action int, key, data []byte) (err error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	defer h.done(&err)
-	if flag != db.RNone && flag != db.RCursor {
-		return db.ErrInvalid
-	}
 	if h.readOnly {
 		return db.ErrReadOnly
 	}
-	_, err = h.access(actionDelete, key, nil)
+	_, err = h.access(action, key, data)
 	return err
 }
 
@@ -642,7 +620,7 @@ func (h *DB) access(action int, key, val []byte) ([]byte, error) {
 	case actionGet:
 		bp = h.page(rbufp.page)
 		if bp.at(ndx+1) < realKey {
-			return h.bigReturn(rbufp, ndx, false)
+			return h.bigReturn(rbufp, ndx, nil)
 		}
 		return bytes.Clone(rbufp.page[bp.at(ndx+1):bp.at(ndx)]), nil
 	case actionPut:
@@ -657,84 +635,72 @@ func (h *DB) access(action int, key, val []byte) ([]byte, error) {
 	}
 }
 
-// Seq returns the next key/data pair in hash order, or ErrNotFound at the
-// end.  RFirst starts over.  The key argument is ignored.
-func (h *DB) Seq(_ []byte, flag db.Flag) (rkey, data []byte, err error) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	defer h.done(&err)
-	if flag != db.RNone && flag != db.RFirst && flag != db.RNext {
-		return nil, nil, db.ErrInvalid
-	}
-	if h.cbucket < 0 || flag == db.RFirst {
-		h.cbucket = 0
-		h.cndx = 1
-		h.cpage = nil
-	}
-
+// seq returns the pair at cursor c and moves c past it, or ErrNotFound
+// at the end.
+func (h *DB) seq(c *cursor) (key, data []byte, err error) {
 	var bufp *buf
 	var bp hpage
 	for bp.b == nil || bp.at(0) == 0 {
-		if bufp = h.cpage; bufp == nil {
-			bucket := h.cbucket
-			for ; bucket <= int(h.hdr.MaxBucket); bucket, h.cndx = bucket+1, 1 {
+		if bufp = c.page; bufp == nil {
+			bucket := c.bucket
+			for ; bucket <= int(h.hdr.MaxBucket); bucket, c.ndx = bucket+1, 1 {
 				if bufp, err = h.getBuf(bucket, nil, false); err != nil {
 					return nil, nil, err
 				}
-				h.cpage = bufp
+				c.page = bufp
 				if bp = h.page(bufp.page); bp.at(0) != 0 {
 					break
 				}
 			}
-			if h.cbucket = bucket; h.cbucket > int(h.hdr.MaxBucket) {
-				h.cbucket = -1
+			if c.bucket = bucket; c.bucket > int(h.hdr.MaxBucket) {
+				c.bucket = -1
 				return nil, nil, db.ErrNotFound
 			}
 		} else {
 			bp = h.page(bufp.page)
 			// Unlike C, survive deletes since the last call shrinking
 			// the page below the cursor.
-			if n := bp.at(0); h.cndx >= n {
+			if n := bp.at(0); c.ndx >= n {
 				if n < 2 || bp.at(n) != ovflPage {
-					h.cpage = nil
-					h.cbucket++
-					h.cndx = 1
+					c.page = nil
+					c.bucket++
+					c.ndx = 1
 					bp = hpage{}
 					continue
 				}
-				h.cndx = n - 1 // follow the overflow link
+				c.ndx = n - 1 // follow the overflow link
 			}
 		}
-		for bp.at(h.cndx+1) == ovflPage {
-			if bufp, err = h.getBuf(bp.at(h.cndx), bufp, false); err != nil {
+		for bp.at(c.ndx+1) == ovflPage {
+			if bufp, err = h.getBuf(bp.at(c.ndx), bufp, false); err != nil {
 				return nil, nil, err
 			}
-			h.cpage = bufp
+			c.page = bufp
 			bp = h.page(bufp.page)
-			h.cndx = 1
+			c.ndx = 1
 		}
 		if bp.at(0) == 0 {
-			h.cpage = nil
-			h.cbucket++
+			c.page = nil
+			c.bucket++
 		}
 	}
 
-	ndx := h.cndx
+	ndx := c.ndx
 	if bp.at(ndx+1) < realKey {
-		return h.bigKeydata(bufp, true)
+		return h.bigKeydata(bufp, c)
 	}
 	end := int(h.hdr.BSize)
 	if ndx > 1 {
 		end = bp.at(ndx - 1)
 	}
-	key := bytes.Clone(bufp.page[bp.at(ndx):end])
+	key = bytes.Clone(bufp.page[bp.at(ndx):end])
 	data = bytes.Clone(bufp.page[bp.at(ndx+1):bp.at(ndx)])
 	if ndx += 2; ndx > bp.at(0) {
-		h.cpage = nil
-		h.cbucket++
-		h.cndx = 1
+		c.page = nil
+		c.bucket++
+		c.ndx = 1
 	} else {
-		h.cndx = ndx
+		c.ndx = ndx
 	}
 	return key, data, nil
 }
@@ -769,5 +735,12 @@ func (h *DB) expandTable() error {
 		hdr.HighMask = int32(newBucket) | hdr.LowMask
 	}
 
+	// The split moves and compacts pairs of oldBucket, cursors in it
+	// start over at its first entry.
+	for _, c := range h.cursors {
+		if c.bucket == oldBucket {
+			c.page, c.ndx = nil, 1
+		}
+	}
 	return h.splitPage(oldBucket, newBucket)
 }

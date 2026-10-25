@@ -2,7 +2,6 @@ package hash
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"math/rand/v2"
 	"os"
@@ -109,15 +108,15 @@ func TestStress(t *testing.T) {
 			switch r.IntN(4) {
 			case 0, 1:
 				desc = fmt.Sprintf("put %d (%d,%d)", i, len(key), len(data))
-				_, err = h.Put(key, data, db.RNone)
+				err = h.Put(key, data)
 			case 2:
 				desc = fmt.Sprintf("del %d", i)
-				if err = h.Del(key, db.RNone); err == db.ErrNotFound {
+				if err = h.Delete(key); err == db.ErrNotFound {
 					err = nil
 				}
 			case 3:
 				desc = fmt.Sprintf("get %d", i)
-				if _, err = h.Get(key, db.RNone); err == db.ErrNotFound {
+				if _, err = h.Get(key); err == db.ErrNotFound {
 					err = nil
 				}
 			}
@@ -145,36 +144,34 @@ func TestCacheLimit(t *testing.T) {
 	}
 	check := func(when string) {
 		t.Helper()
-		// The scan cursor's page may stay on top of the limit.
+		// The cursor's page may stay on top of the limit.
 		if got, limit := h.cache.Len(), minBuffers+1; got > limit {
 			t.Fatalf("%s: %d buffers cached, want at most %d", when, got, limit)
 		}
 	}
 	for i := range 3000 {
 		k, v := dbtest.Gen(i)
-		if _, err := h.Put(k, v, db.RNone); err != nil {
+		if err := h.Put(k, v); err != nil {
 			t.Fatal(err)
 		}
 		check(fmt.Sprintf("put %d", i))
 	}
-	n := 0
-	for flag := db.RFirst; ; flag = db.RNext {
-		_, _, err := h.Seq(nil, flag)
-		if errors.Is(err, db.ErrNotFound) {
-			break
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		check("seq")
+	c := h.Cursor()
+	defer c.Close()
+	var n int
+	for range c.All() {
+		check("scan")
 		n++
+	}
+	if err := c.Err(); err != nil {
+		t.Fatal(err)
 	}
 	if n != 3000 {
 		t.Errorf("seq: got %d records, want 3000", n)
 	}
 	for i := range 3000 {
 		k, v := dbtest.Gen(i)
-		if got, err := h.Get(k, db.RNone); err != nil || !bytes.Equal(got, v) {
+		if got, err := h.Get(k); err != nil || !bytes.Equal(got, v) {
 			t.Fatalf("get %d: %v", i, err)
 		}
 	}

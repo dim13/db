@@ -57,12 +57,12 @@ func (t *Table) Search(e Entry, a Action) (Entry, error) {
 	key := append([]byte(e.Key), 0)
 	switch a {
 	case Enter:
-		if _, err := t.h.Put(key, append([]byte(e.Data), 0), db.RNoOverwrite); err != nil {
+		if err := t.h.PutNew(key, append([]byte(e.Data), 0)); err != nil {
 			return Entry{}, err
 		}
 		return e, nil
 	case Find:
-		data, err := t.h.Get(key, db.RNone)
+		data, err := t.h.Get(key)
 		if err != nil {
 			return Entry{}, err
 		}

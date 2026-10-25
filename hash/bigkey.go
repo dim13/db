@@ -197,30 +197,30 @@ func (h *DB) findLastPage(bufp *buf) (int, *buf, error) {
 	return 0, bufp, nil
 }
 
-// setCursor advances the scan cursor past the big pair ending on bufp.
-func (h *DB) setCursor(bufp *buf) error {
+// setCursor advances cursor c past the big pair ending on bufp.
+func (h *DB) setCursor(c *cursor, bufp *buf) error {
 	bp := h.page(bufp.page)
-	h.cndx = 1
+	c.ndx = 1
 	if bp.at(0) == 2 {
 		// The pair ended the bucket's chain.
-		h.cpage = nil
-		h.cbucket++
+		c.page = nil
+		c.bucket++
 		return nil
 	}
 	var err error
-	if h.cpage, err = h.next(bufp); err != nil {
+	if c.page, err = h.next(bufp); err != nil {
 		return err
 	}
-	if h.page(h.cpage.page).at(0) == 0 {
-		h.cbucket++
-		h.cpage = nil
+	if h.page(c.page.page).at(0) == 0 {
+		c.bucket++
+		c.page = nil
 	}
 	return nil
 }
 
 // bigReturn returns the data of the big pair at ndx (always 1) of bufp,
-// moving the scan cursor past it if setCurrent.
-func (h *DB) bigReturn(bufp *buf, ndx int, setCurrent bool) ([]byte, error) {
+// moving cursor c past it unless c is nil.
+func (h *DB) bigReturn(bufp *buf, ndx int, c *cursor) ([]byte, error) {
 	bp := h.page(bufp.page)
 	var err error
 	for bp.at(ndx+1) == partialKey {
@@ -247,30 +247,31 @@ func (h *DB) bigReturn(bufp *buf, ndx int, setCurrent bool) ([]byte, error) {
 	default:
 		off := bp.at(bp.at(0))
 		val := bytes.Clone(bp.b[off:bp.at(1)])
-		if setCurrent {
-			if err := h.setCursor(bufp); err != nil {
+		if c != nil {
+			if err := h.setCursor(c, bufp); err != nil {
 				return nil, err
 			}
 		}
 		return val, nil
 	}
-	data, err := h.collectData(bufp, setCurrent)
+	data, err := h.collectData(bufp, c)
 	if err != nil {
 		return nil, err
 	}
 	return append(bytes.Clone(head), data...), nil
 }
 
-// collectData collects data continued on pages starting at bufp.
-func (h *DB) collectData(bufp *buf, set bool) ([]byte, error) {
+// collectData collects data continued on pages starting at bufp, moving
+// cursor c past them unless c is nil.
+func (h *DB) collectData(bufp *buf, c *cursor) ([]byte, error) {
 	var data []byte
 	var err error
 	for {
 		bp := h.page(bufp.page)
 		data = append(data, bp.b[bp.at(1):h.hdr.BSize]...)
 		if bp.at(2) == fullKeyData {
-			if set {
-				if err := h.setCursor(bufp); err != nil {
+			if c != nil {
+				if err := h.setCursor(c, bufp); err != nil {
 					return nil, err
 				}
 			}
@@ -282,15 +283,16 @@ func (h *DB) collectData(bufp *buf, set bool) ([]byte, error) {
 	}
 }
 
-// bigKeydata collects key and data of the big pair starting at bufp.
-func (h *DB) bigKeydata(bufp *buf, set bool) ([]byte, []byte, error) {
+// bigKeydata collects key and data of the big pair starting at bufp,
+// moving cursor c past it unless c is nil.
+func (h *DB) bigKeydata(bufp *buf, c *cursor) ([]byte, []byte, error) {
 	var key []byte
 	var err error
 	for {
 		bp := h.page(bufp.page)
 		key = append(key, bp.b[bp.at(1):h.hdr.BSize]...)
 		if bp.at(2) == fullKey || bp.at(2) == fullKeyData {
-			val, err := h.bigReturn(bufp, 1, set)
+			val, err := h.bigReturn(bufp, 1, c)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -313,7 +315,7 @@ func (h *DB) bigSplit(op, np, bigKeyp *buf, obucket int) (splitReturn, error) {
 	var ret splitReturn
 	bp := bigKeyp
 
-	key, _, err := h.bigKeydata(bigKeyp, false)
+	key, _, err := h.bigKeydata(bigKeyp, nil)
 	if err != nil {
 		return ret, err
 	}

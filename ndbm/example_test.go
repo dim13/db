@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/dim13/db"
 	"github.com/dim13/db/ndbm"
 )
 
@@ -20,7 +19,7 @@ func Example() {
 	}
 	defer d.Close()
 
-	if err := d.Store([]byte("key"), []byte("content"), db.DBMReplace); err != nil {
+	if err := d.Store([]byte("key"), []byte("content"), ndbm.Replace); err != nil {
 		log.Fatal(err)
 	}
 	v, err := d.Fetch([]byte("key"))

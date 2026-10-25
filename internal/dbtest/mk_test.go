@@ -49,6 +49,44 @@ func (b btreeDB) Seq(k []byte, flag db.Flag) ([]byte, []byte, error) {
 	return b.c.Key(), b.c.Data(), nil
 }
 
+// hashDB gives hash the db.DB flag API.
+type hashDB struct {
+	*hash.DB
+	c *hash.Cursor
+}
+
+func (h hashDB) Put(k, v []byte, _ db.Flag) ([]byte, error) { return k, h.DB.Put(k, v) }
+func (h hashDB) Get(k []byte, _ db.Flag) ([]byte, error)    { return h.DB.Get(k) }
+func (h hashDB) Del(k []byte, _ db.Flag) error              { return h.DB.Delete(k) }
+func (h hashDB) Sync(db.Flag) error                         { return h.DB.Sync() }
+
+func (h hashDB) Seq(_ []byte, flag db.Flag) ([]byte, []byte, error) {
+	var ok bool
+	switch flag {
+	case db.RFirst:
+		ok = h.c.First()
+	case db.RNext:
+		ok = h.c.Next()
+	default:
+		return nil, nil, db.ErrInvalid
+	}
+	if !ok {
+		if err := h.c.Err(); err != nil {
+			return nil, nil, err
+		}
+		return nil, nil, db.ErrNotFound
+	}
+	return h.c.Key(), h.c.Data(), nil
+}
+
+func newHash(f *os.File, i *hash.Info) (db.DB, error) {
+	d, err := hash.New(f, i)
+	if err != nil {
+		return nil, err
+	}
+	return hashDB{DB: d, c: d.Cursor()}, nil
+}
+
 func newBtree(f *os.File, i *btree.Info) (db.DB, error) {
 	d, err := btree.New(f, i)
 	if err != nil {
@@ -64,7 +102,7 @@ func TestMk(t *testing.T) {
 	}
 	open := map[string]func(*os.File) (db.DB, error){
 		"btree": func(f *os.File) (db.DB, error) { return newBtree(f, nil) },
-		"hash":  func(f *os.File) (db.DB, error) { return hash.New(f, nil) },
+		"hash":  func(f *os.File) (db.DB, error) { return newHash(f, nil) },
 		"recno": func(f *os.File) (db.DB, error) { return recno.New(f, nil) },
 		"btree512": func(f *os.File) (db.DB, error) {
 			return newBtree(f, &btree.Info{PageSize: 512})
@@ -73,16 +111,16 @@ func TestMk(t *testing.T) {
 			return newBtree(f, &btree.Info{ByteOrder: binary.BigEndian})
 		},
 		"hash256": func(f *os.File) (db.DB, error) {
-			return hash.New(f, &hash.Info{BucketSize: 256})
+			return newHash(f, &hash.Info{BucketSize: 256})
 		},
 		"hashbe": func(f *os.File) (db.DB, error) {
-			return hash.New(f, &hash.Info{ByteOrder: binary.BigEndian})
+			return newHash(f, &hash.Info{ByteOrder: binary.BigEndian})
 		},
 		"btree512be": func(f *os.File) (db.DB, error) {
 			return newBtree(f, &btree.Info{PageSize: 512, ByteOrder: binary.BigEndian})
 		},
 		"hash256le": func(f *os.File) (db.DB, error) {
-			return hash.New(f, &hash.Info{BucketSize: 256, ByteOrder: binary.LittleEndian})
+			return newHash(f, &hash.Info{BucketSize: 256, ByteOrder: binary.LittleEndian})
 		},
 	}
 	for name, fn := range open {

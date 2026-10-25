@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/dim13/db"
 	"github.com/dim13/db/internal/dbtest"
 )
 
@@ -36,7 +35,7 @@ func FuzzOpen(f *testing.F) {
 	d := open(f, name, &Info{BucketSize: 256})
 	for i := range 40 {
 		k, v := dbtest.Gen(i)
-		if _, err := d.Put(k, v, db.RNone); err != nil {
+		if err := d.Put(k, v); err != nil {
 			f.Fatal(err)
 		}
 	}
@@ -64,14 +63,14 @@ func FuzzOpen(f *testing.F) {
 		}
 		defer d.Close()
 		// Bounded, corrupt page links may form a cycle.
-		flag := db.RFirst
-		for range 1000 {
-			k, _, err := d.Seq(nil, flag)
-			if err != nil {
-				return
+		c := d.Cursor()
+		defer c.Close()
+		var n int
+		for k := range c.All() {
+			d.Get(k)
+			if n++; n == 1000 {
+				break
 			}
-			d.Get(k, db.RNone)
-			flag = db.RNext
 		}
 	})
 }

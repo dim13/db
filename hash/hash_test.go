@@ -2,48 +2,26 @@ package hash
 
 import (
 	"encoding/binary"
-	"errors"
 	"hash/fnv"
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/dim13/db"
 	"github.com/dim13/db/internal/dbtest"
 )
 
-// DB must implement db.DB.
-var _ db.DB = (*DB)(nil)
-
-// testDB adapts DB to dbtest.DB.
+// testDB adds Scan to DB for dbtest.
 type testDB struct{ *DB }
 
-func (t testDB) Get(key []byte) ([]byte, error) {
-	return t.DB.Get(key, db.RNone)
-}
-
-func (t testDB) Put(key, data []byte) error {
-	_, err := t.DB.Put(key, data, db.RNone)
-	return err
-}
-
-func (t testDB) Delete(key []byte) error {
-	return t.DB.Del(key, db.RNone)
-}
-
 func (t testDB) Scan(yield func(key, data []byte) bool) error {
-	for flag := db.RFirst; ; flag = db.RNext {
-		k, v, err := t.DB.Seq(nil, flag)
-		if errors.Is(err, db.ErrNotFound) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
+	c := t.Cursor()
+	defer c.Close()
+	for k, v := range c.All() {
 		if !yield(k, v) {
-			return nil
+			break
 		}
 	}
+	return c.Err()
 }
 
 func open(t testing.TB, name string, info *Info) *DB {
@@ -71,20 +49,18 @@ func TestAliases(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer d.Close()
+	c := d.Cursor()
+	defer c.Close()
 	var n int
-	for flag := db.RFirst; ; flag = db.RNext {
-		k, v, err := d.Seq(nil, flag)
-		if err == db.ErrNotFound {
-			break
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		got, err := d.Get(k, db.RNone)
+	for k, v := range c.All() {
+		got, err := d.Get(k)
 		if err != nil || string(got) != string(v) {
 			t.Fatalf("get %q: %v", k, err)
 		}
 		n++
+	}
+	if err := c.Err(); err != nil {
+		t.Fatal(err)
 	}
 	if n == 0 {
 		t.Error("no records")
@@ -204,29 +180,27 @@ func TestConcurrent(t *testing.T) {
 	}
 }
 
-// TestSeqAfterDelete deletes while scanning, which C leaves undefined;
-// the scan may skip entries but must not fail.
-func TestSeqAfterDelete(t *testing.T) {
+// TestScanAfterDelete deletes through the DB while scanning, which C
+// leaves undefined; the scan must not fail.
+func TestScanAfterDelete(t *testing.T) {
 	h, _ := New(nil, &Info{BucketSize: 512})
 	for i := range 2000 {
 		k, v := dbtest.Gen(i)
-		h.Put(k, v, db.RNone)
+		h.Put(k, v)
 	}
-	for flag := db.RFirst; ; flag = db.RNext {
-		k, _, err := h.Seq(nil, flag)
-		if errors.Is(err, db.ErrNotFound) {
-			break
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		h.Del(k, db.RNone) // delete what was just returned
+	c := h.Cursor()
+	defer c.Close()
+	for k := range c.All() {
+		h.Delete(k) // delete what was just returned
 		if len(k)%3 == 0 {
 			for i := 0; i < 2000; i += 7 {
 				k, _ := dbtest.Gen(i)
-				h.Del(k, db.RNone)
+				h.Delete(k)
 			}
 		}
+	}
+	if err := c.Err(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -235,13 +209,13 @@ func BenchmarkGet(b *testing.B) {
 	keys := make([][]byte, 10000)
 	for i := range keys {
 		k, v := dbtest.Gen(i)
-		d.Put(k, v, db.RNone)
+		d.Put(k, v)
 		keys[i] = k
 	}
 	b.Run("serial", func(b *testing.B) {
 		var i int
 		for b.Loop() {
-			d.Get(keys[i%len(keys)], db.RNone)
+			d.Get(keys[i%len(keys)])
 			i++
 		}
 	})
@@ -249,7 +223,7 @@ func BenchmarkGet(b *testing.B) {
 		b.RunParallel(func(pb *testing.PB) {
 			var i int
 			for pb.Next() {
-				d.Get(keys[i%len(keys)], db.RNone)
+				d.Get(keys[i%len(keys)])
 				i++
 			}
 		})

@@ -133,6 +133,12 @@ func (h *DB) delpair(bufp *buf, ndx int) error {
 	bp.set(0, n-2)
 	h.hdr.NKeys--
 	bufp.mod = true
+	// Keep cursors past the pair on their entry.
+	for _, c := range h.cursors {
+		if c.page == bufp && c.ndx > ndx {
+			c.ndx -= 2
+		}
+	}
 	return nil
 }
 
