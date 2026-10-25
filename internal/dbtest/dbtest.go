@@ -134,36 +134,40 @@ func Model(d db.DB, n int, reopen func(db.DB) (db.DB, error)) (db.DB, error) {
 }
 
 // Ops applies ops to d and a map, three bytes per operation, and returns
-// the first disagreement.  The first byte selects put, delete or get, the
-// second the key, and the third the data length, 255 for overflow-sized
+// the first disagreement.  The low nibble of the first byte selects put,
+// delete or get and the high nibble repeats it on up to 15 following
+// keys, so short inputs still grow deep trees.  The second byte selects
+// the first key, and the third the data length, 255 for overflow-sized
 // data.  Reopen, if not nil, is called before the final check; Ops
 // returns the database last in use.
 func Ops(d db.DB, ops []byte, reopen func(db.DB) (db.DB, error)) (db.DB, error) {
 	m := make(map[string][]byte)
 	for i := 0; i+3 <= len(ops); i += 3 {
-		key, _ := Gen(int(ops[i+1]))
 		n := int(ops[i+2])
 		if n == 255 {
 			n = 5000
 		}
 		data := bytes.Repeat([]byte{ops[i+2]}, n)
-		switch ops[i] % 3 {
-		case 0:
-			if _, err := d.Put(key, data, db.RNone); err != nil {
-				return d, fmt.Errorf("op %d put: %w", i/3, err)
-			}
-			m[string(key)] = data
-		case 1:
-			err := d.Del(key, db.RNone)
-			if _, ok := m[string(key)]; ok != (err == nil) {
-				return d, fmt.Errorf("op %d del: %v, in model %v", i/3, err, ok)
-			}
-			delete(m, string(key))
-		case 2:
-			got, err := d.Get(key, db.RNone)
-			want, ok := m[string(key)]
-			if ok != (err == nil) || !bytes.Equal(got, want) {
-				return d, fmt.Errorf("op %d get: %v, in model %v", i/3, err, ok)
+		for j := range int(ops[i]>>4) + 1 {
+			key, _ := Gen((int(ops[i+1]) + j) % 256)
+			switch ops[i] & 0xf % 3 {
+			case 0:
+				if _, err := d.Put(key, data, db.RNone); err != nil {
+					return d, fmt.Errorf("op %d put: %w", i/3, err)
+				}
+				m[string(key)] = data
+			case 1:
+				err := d.Del(key, db.RNone)
+				if _, ok := m[string(key)]; ok != (err == nil) {
+					return d, fmt.Errorf("op %d del: %v, in model %v", i/3, err, ok)
+				}
+				delete(m, string(key))
+			case 2:
+				got, err := d.Get(key, db.RNone)
+				want, ok := m[string(key)]
+				if ok != (err == nil) || !bytes.Equal(got, want) {
+					return d, fmt.Errorf("op %d get: %v, in model %v", i/3, err, ok)
+				}
 			}
 		}
 	}
@@ -174,6 +178,25 @@ func Ops(d db.DB, ops []byte, reopen func(db.DB) (db.DB, error)) (db.DB, error) 
 		}
 	}
 	return d, check(d, m)
+}
+
+// Sorted returns an error unless a scan of d returns its keys in
+// ascending byte order.
+func Sorted(d db.DB) error {
+	var prev []byte
+	for flag := db.RFirst; ; flag = db.RNext {
+		k, _, err := d.Seq(nil, flag)
+		if errors.Is(err, db.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if prev != nil && bytes.Compare(prev, k) >= 0 {
+			return fmt.Errorf("seq: %.20q after %.20q", k, prev)
+		}
+		prev = k
+	}
 }
 
 // check compares all records of d with m.

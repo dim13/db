@@ -12,6 +12,16 @@ import (
 func FuzzOps(f *testing.F) {
 	f.Add([]byte{0, 1, 10, 0, 2, 255, 2, 1, 0, 1, 1, 0, 2, 2, 0})
 	f.Add([]byte{0, 0, 255, 0, 151, 255, 1, 0, 0, 2, 151, 0})
+	// Fill all keys, deep enough to split internal pages, then delete
+	// most of them again to merge pages away.
+	var deep []byte
+	for k := 0; k < 256; k += 16 {
+		deep = append(deep, 0xf0, byte(k), 200)
+	}
+	for k := 0; k < 240; k += 16 {
+		deep = append(deep, 0xf1, byte(k), 0)
+	}
+	f.Add(deep)
 	f.Fuzz(func(t *testing.T, ops []byte) {
 		name := filepath.Join(t.TempDir(), "test.db")
 		d := open(t, name, &Info{PageSize: 512, CacheSize: 1})
@@ -22,6 +32,9 @@ func FuzzOps(f *testing.F) {
 			return open(t, name, &Info{PageSize: 512, CacheSize: 1}), nil
 		})
 		if err != nil {
+			t.Fatal(err)
+		}
+		if err := dbtest.Sorted(d); err != nil {
 			t.Fatal(err)
 		}
 		if err := d.Close(); err != nil {
