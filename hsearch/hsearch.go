@@ -9,14 +9,14 @@ import (
 	"github.com/dim13/db/hash"
 )
 
+// Action selects what Search does.
+type Action int
+
 // Search actions
 const (
 	Find  Action = iota // look up the key
 	Enter               // add the entry unless the key exists
 )
-
-// Action selects what Search does.
-type Action int
 
 // Entry is a key with its data.
 type Entry struct {

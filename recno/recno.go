@@ -23,6 +23,9 @@ const (
 	sSearch
 )
 
+// putMode selects how put stores a record.
+type putMode int
+
 const (
 	putReplace putMode = iota // replace or create the record
 	putNew                    // create the record, ErrKeyExist if it exists
@@ -37,9 +40,6 @@ type File interface {
 	db.Storage
 	Truncate(size int64) error
 }
-
-// putMode selects how put stores a record.
-type putMode int
 
 // Info holds options for New.  Zero fields and a nil Info select defaults.
 type Info struct {

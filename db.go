@@ -11,6 +11,9 @@ import (
 	"iter"
 )
 
+// Mode selects what DBM.Store does with an existing key.
+type Mode int
+
 // Store modes
 const (
 	DBMInsert  Mode = iota // keep existing data, return ErrKeyExist
@@ -56,9 +59,6 @@ type DB[K any] interface {
 	// Close syncs the database; the storage stays open.
 	Close() error
 }
-
-// Mode selects what DBM.Store does with an existing key.
-type Mode int
 
 // DBM is an open ndbm database, the counterpart of the C DBM handle.
 // Implementations are safe for concurrent use; FirstKey and NextKey share
