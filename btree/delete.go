@@ -2,12 +2,17 @@ package btree
 
 import "github.com/dim13/db"
 
-// Del deletes all entries with key, or with RCursor the entry at the
-// cursor.
-func (t *DB) Del(key []byte, flag db.Flag) (err error) {
+// Delete deletes all entries with key, or returns ErrNotFound.
+func (t *DB) Delete(key []byte) (err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	defer t.done(&err)
+	return t.del(key, db.RNone)
+}
+
+// del deletes all entries with key, or with RCursor the entry at the
+// cursor; callers hold t.mu for writing.
+func (t *DB) del(key []byte, flag db.Flag) (err error) {
 	if t.flags.IsSet(bRdOnly) {
 		return db.ErrReadOnly
 	}

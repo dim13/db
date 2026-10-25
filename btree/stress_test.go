@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/dim13/db"
 	"github.com/dim13/db/internal/dbtest"
 )
 
@@ -35,12 +34,12 @@ func TestStress(t *testing.T) {
 			switch r.IntN(4) {
 			case 0, 1:
 				desc = fmt.Sprintf("put %d (%d,%d)", i, len(key), len(data))
-				tr.Put(key, data, db.RNone)
+				tr.Put(key, data)
 			case 2:
 				desc = fmt.Sprintf("del %d", i)
-				tr.Del(key, db.RNone)
+				tr.Delete(key)
 			case 3:
-				tr.Get(key, db.RNone)
+				tr.Get(key)
 			}
 		}()
 		if every > 0 && op%every == 0 {

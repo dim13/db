@@ -13,20 +13,36 @@ import (
 	"github.com/dim13/db/recno"
 )
 
+// btreeDB gives btree the db.DB flag API.
+type btreeDB struct{ *btree.DB }
+
+func (b btreeDB) Put(k, v []byte, _ db.Flag) ([]byte, error) { return k, b.DB.Put(k, v) }
+func (b btreeDB) Get(k []byte, _ db.Flag) ([]byte, error)    { return b.DB.Get(k) }
+func (b btreeDB) Del(k []byte, _ db.Flag) error              { return b.DB.Delete(k) }
+func (b btreeDB) Sync(db.Flag) error                         { return b.DB.Sync() }
+
+func newBtree(f *os.File, i *btree.Info) (db.DB, error) {
+	d, err := btree.New(f, i)
+	if err != nil {
+		return nil, err
+	}
+	return btreeDB{d}, nil
+}
+
 func TestMk(t *testing.T) {
 	dir := os.Getenv("MKDIR")
 	if dir == "" {
 		t.Skip()
 	}
 	open := map[string]func(*os.File) (db.DB, error){
-		"btree": func(f *os.File) (db.DB, error) { return btree.New(f, nil) },
+		"btree": func(f *os.File) (db.DB, error) { return newBtree(f, nil) },
 		"hash":  func(f *os.File) (db.DB, error) { return hash.New(f, nil) },
 		"recno": func(f *os.File) (db.DB, error) { return recno.New(f, nil) },
 		"btree512": func(f *os.File) (db.DB, error) {
-			return btree.New(f, &btree.Info{PageSize: 512})
+			return newBtree(f, &btree.Info{PageSize: 512})
 		},
 		"btreebe": func(f *os.File) (db.DB, error) {
-			return btree.New(f, &btree.Info{ByteOrder: binary.BigEndian})
+			return newBtree(f, &btree.Info{ByteOrder: binary.BigEndian})
 		},
 		"hash256": func(f *os.File) (db.DB, error) {
 			return hash.New(f, &hash.Info{BucketSize: 256})
@@ -35,7 +51,7 @@ func TestMk(t *testing.T) {
 			return hash.New(f, &hash.Info{ByteOrder: binary.BigEndian})
 		},
 		"btree512be": func(f *os.File) (db.DB, error) {
-			return btree.New(f, &btree.Info{PageSize: 512, ByteOrder: binary.BigEndian})
+			return newBtree(f, &btree.Info{PageSize: 512, ByteOrder: binary.BigEndian})
 		},
 		"hash256le": func(f *os.File) (db.DB, error) {
 			return hash.New(f, &hash.Info{BucketSize: 256, ByteOrder: binary.LittleEndian})

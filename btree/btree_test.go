@@ -12,23 +12,20 @@ import (
 	"github.com/dim13/db/internal/dbtest"
 )
 
-// DB must implement db.DB.
-var _ db.DB = (*DB)(nil)
-
-// testDB adapts DB to dbtest.DB.
+// testDB adds Scan to DB for dbtest.
 type testDB struct{ *DB }
 
-func (t testDB) Get(key []byte) ([]byte, error) {
-	return t.DB.Get(key, db.RNone)
+// delCursor and putCursor have no public method until cursors return.
+func delCursor(d *DB) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.del(nil, db.RCursor)
 }
 
-func (t testDB) Put(key, data []byte) error {
-	_, err := t.DB.Put(key, data, db.RNone)
-	return err
-}
-
-func (t testDB) Delete(key []byte) error {
-	return t.DB.Del(key, db.RNone)
+func putCursor(d *DB, key, data []byte) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.put(key, data, db.RCursor)
 }
 
 func (t testDB) Scan(yield func(key, data []byte) bool) error {
@@ -101,13 +98,13 @@ func TestInMemory(t *testing.T) {
 }
 
 func TestDup(t *testing.T) {
-	d, err := New(nil, &Info{Flags: RDup, PageSize: 512})
+	d, err := New(nil, &Info{Duplicates: true, PageSize: 512})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for i := range 300 {
 		for _, k := range []string{"a", "b", "c"} {
-			if _, err := d.Put([]byte(k), fmt.Appendf(nil, "%s%03d", k, i), db.RNone); err != nil {
+			if err := d.Put([]byte(k), fmt.Appendf(nil, "%s%03d", k, i)); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -125,7 +122,7 @@ func TestDup(t *testing.T) {
 	var n int
 	for err == nil && string(k) == "b" {
 		if n%2 == 0 {
-			if err := d.Del(nil, db.RCursor); err != nil {
+			if err := delCursor(d); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -135,7 +132,7 @@ func TestDup(t *testing.T) {
 	if n != 300 || string(k) != "c" {
 		t.Fatalf("got %d b's then %q", n, k)
 	}
-	if err := d.Del([]byte("a"), db.RNone); err != nil {
+	if err := d.Delete([]byte("a")); err != nil {
 		t.Fatal(err)
 	}
 	counts := map[string]int{}
@@ -149,25 +146,59 @@ func TestDup(t *testing.T) {
 	if fmt.Sprint(counts) != "map[b:150 c:300]" {
 		t.Errorf("got %v", counts)
 	}
-	if _, err := d.Get([]byte("a"), db.RNone); err != db.ErrNotFound {
+	if _, err := d.Get([]byte("a")); err != db.ErrNotFound {
 		t.Errorf("got %v, want %v", err, db.ErrNotFound)
 	}
 }
 
-func TestNoOverwrite(t *testing.T) {
+func TestPutNew(t *testing.T) {
 	d, _ := New(nil, nil)
-	d.Put([]byte("k"), []byte("v"), db.RNone)
-	if _, err := d.Put([]byte("k"), []byte("w"), db.RNoOverwrite); err != db.ErrKeyExist {
-		t.Errorf("got %v, want %v", err, db.ErrKeyExist)
-	}
-	if _, v, _ := d.Seq(nil, db.RLast); string(v) != "v" {
-		t.Errorf("got %q", v)
-	}
-	if _, err := d.Put([]byte("k"), []byte("w"), db.RCursor); err != nil {
+	k := []byte("k")
+	if err := d.PutNew(k, []byte("a")); err != nil {
 		t.Fatal(err)
 	}
-	if v, _ := d.Get([]byte("k"), db.RNone); string(v) != "w" {
+	if err := d.PutNew(k, []byte("b")); !errors.Is(err, db.ErrKeyExist) {
+		t.Errorf("got %v, want %v", err, db.ErrKeyExist)
+	}
+	if got, _ := d.Get(k); string(got) != "a" {
+		t.Errorf("got %q, want %q", got, "a")
+	}
+	if _, v, _ := d.Seq(nil, db.RLast); string(v) != "a" {
 		t.Errorf("got %q", v)
+	}
+	if err := putCursor(d, k, []byte("w")); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := d.Get(k); string(got) != "w" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestDuplicates(t *testing.T) {
+	d, _ := New(nil, &Info{Duplicates: true})
+	k := []byte("k")
+	d.Put(k, []byte("a"))
+	d.Put(k, []byte("b"))
+	var n int
+	if err := (testDB{d}).Scan(func(key, _ []byte) bool {
+		if string(key) == "k" {
+			n++
+		}
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Errorf("got %d entries, want 2", n)
+	}
+	if err := d.Delete(k); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Get(k); !errors.Is(err, db.ErrNotFound) {
+		t.Errorf("got %v, want %v", err, db.ErrNotFound)
+	}
+	if err := d.Delete(k); !errors.Is(err, db.ErrNotFound) {
+		t.Errorf("got %v, want %v", err, db.ErrNotFound)
 	}
 }
 
@@ -194,14 +225,6 @@ func TestLibc(t *testing.T) {
 	}
 	if err := dbtest.Compare(got, want); err != nil {
 		t.Error(err)
-	}
-}
-
-func TestPutKey(t *testing.T) {
-	d, _ := New(nil, nil)
-	k, err := d.Put([]byte("key"), []byte("value"), db.RNone)
-	if err != nil || string(k) != "key" {
-		t.Errorf("got %q, %v", k, err)
 	}
 }
 
@@ -257,13 +280,13 @@ func BenchmarkGet(b *testing.B) {
 	keys := make([][]byte, 10000)
 	for i := range keys {
 		k, v := dbtest.Gen(i)
-		d.Put(k, v, db.RNone)
+		d.Put(k, v)
 		keys[i] = k
 	}
 	b.Run("serial", func(b *testing.B) {
 		var i int
 		for b.Loop() {
-			d.Get(keys[i%len(keys)], db.RNone)
+			d.Get(keys[i%len(keys)])
 			i++
 		}
 	})
@@ -271,7 +294,7 @@ func BenchmarkGet(b *testing.B) {
 		b.RunParallel(func(pb *testing.PB) {
 			var i int
 			for pb.Next() {
-				d.Get(keys[i%len(keys)], db.RNone)
+				d.Get(keys[i%len(keys)])
 				i++
 			}
 		})

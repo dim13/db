@@ -25,12 +25,6 @@ const (
 	minCache      = 5 // pages
 )
 
-// Flag is an option of Info.Flags.
-type Flag uint
-
-// RDup permits duplicate keys.
-const RDup Flag = 0x01
-
 // Tree flags; bNoDups is stored on disk
 const (
 	bInMem    = 1 << iota // no backing file
@@ -57,7 +51,7 @@ const (
 
 // Info holds options for New.  Zero fields and a nil Info select defaults.
 type Info struct {
-	Flags          Flag                  // RDup
+	Duplicates     bool                  // permit duplicate keys
 	MinKeysPerPage int                   // default 2, larger keys and data go to overflow pages
 	PageSize       int                   // of a new file, default 4096
 	CacheSize      int                   // bytes of pages cached, default 1 MiB, at least 5 pages
@@ -122,9 +116,6 @@ func New(file db.Storage, info *Info) (*DB, error) {
 	var b Info
 	if info != nil {
 		b = *info
-		if b.Flags&^RDup != 0 {
-			return nil, fmt.Errorf("%w: flags %#x", db.ErrInvalid, b.Flags)
-		}
 		if b.PageSize != 0 && !validPSize(b.PageSize) {
 			return nil, fmt.Errorf("%w: page size %d", db.ErrInvalid, b.PageSize)
 		}
@@ -196,7 +187,7 @@ func New(file db.Storage, info *Info) (*DB, error) {
 		if b.PageSize == 0 {
 			b.PageSize = defPSize
 		}
-		if b.Flags&RDup == 0 {
+		if !b.Duplicates {
 			t.flags.Set(bNoDups)
 		}
 		t.free = pInvalid
@@ -294,13 +285,10 @@ func (t *DB) done(err *error) {
 	}
 }
 
-// Sync writes all changes to disk, flag must be db.RNone, otherwise it returns ErrInvalid.
-func (t *DB) Sync(flag db.Flag) error {
+// Sync writes all changes to disk.
+func (t *DB) Sync() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if flag != db.RNone {
-		return db.ErrInvalid
-	}
 	return t.sync()
 }
 
@@ -622,13 +610,10 @@ func (t *DB) sibling(pg uint32, index int, key []byte) (epg, bool, error) {
 
 // Get returns the data stored under key, or ErrNotFound.  With duplicates
 // it returns one of them.
-func (t *DB) Get(key []byte, flag db.Flag) (data []byte, err error) {
+func (t *DB) Get(key []byte) (data []byte, err error) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	defer t.done(&err)
-	if flag != db.RNone {
-		return nil, db.ErrInvalid
-	}
 	e, exact, _, err := t.lookup(key, nil)
 	if err != nil {
 		return nil, err
@@ -640,17 +625,21 @@ func (t *DB) Get(key []byte, flag db.Flag) (data []byte, err error) {
 	return data, err
 }
 
-// Put stores data under key and returns key.  Without RDup it replaces an
-// existing entry; with RNoOverwrite it returns ErrKeyExist instead; with
-// RCursor it replaces the entry at the cursor.
-func (t *DB) Put(key, data []byte, flag db.Flag) (rkey []byte, err error) {
+// Put stores data under key.  It replaces an existing entry, or with
+// Duplicates adds another one.
+func (t *DB) Put(key, data []byte) (err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	defer t.done(&err)
-	if err := t.put(key, data, flag); err != nil {
-		return nil, err
-	}
-	return key, nil
+	return t.put(key, data, db.RNone)
+}
+
+// PutNew stores data under key, or returns ErrKeyExist if key is present.
+func (t *DB) PutNew(key, data []byte) (err error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	defer t.done(&err)
+	return t.put(key, data, db.RNoOverwrite)
 }
 
 // put inserts key/data, moving oversized items to overflow pages and splitting

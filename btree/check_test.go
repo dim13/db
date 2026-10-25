@@ -65,13 +65,13 @@ func (t *DB) check() error {
 }
 
 func TestDupCheck(t *testing.T) {
-	tr, err := New(nil, &Info{Flags: RDup, PageSize: 512})
+	tr, err := New(nil, &Info{Duplicates: true, PageSize: 512})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for i := range 300 {
 		for _, k := range []string{"a", "b", "c"} {
-			if _, err := tr.Put([]byte(k), fmt.Appendf(nil, "%s%03d", k, i), db.RNone); err != nil {
+			if err := tr.Put([]byte(k), fmt.Appendf(nil, "%s%03d", k, i)); err != nil {
 				t.Fatal(err)
 			}
 			if err := tr.check(); err != nil {
@@ -82,7 +82,7 @@ func TestDupCheck(t *testing.T) {
 	k, _, err := tr.Seq([]byte("b"), db.RCursor)
 	for n := 0; err == nil && string(k) == "b"; n++ {
 		if n%2 == 0 {
-			if err := tr.Del(nil, db.RCursor); err != nil {
+			if err := delCursor(tr); err != nil {
 				t.Fatal(err)
 			}
 			if err := tr.check(); err != nil {
@@ -91,7 +91,7 @@ func TestDupCheck(t *testing.T) {
 		}
 		k, _, err = tr.Seq(nil, db.RNext)
 	}
-	if err := tr.Del([]byte("a"), db.RNone); err != nil {
+	if err := tr.Delete([]byte("a")); err != nil {
 		t.Fatal(err)
 	}
 	if err := tr.check(); err != nil {
@@ -122,7 +122,7 @@ func TestCacheLimit(t *testing.T) {
 	}
 	for i := range 2000 {
 		k, v := dbtest.Gen(i)
-		if _, err := d.Put(k, v, db.RNone); err != nil {
+		if err := d.Put(k, v); err != nil {
 			t.Fatal(err)
 		}
 		if got, want := d.mp.cache.Len(), minCache; got > want {
@@ -131,7 +131,7 @@ func TestCacheLimit(t *testing.T) {
 	}
 	for i := range 2000 {
 		k, v := dbtest.Gen(i)
-		if got, err := d.Get(k, db.RNone); err != nil || !bytes.Equal(got, v) {
+		if got, err := d.Get(k); err != nil || !bytes.Equal(got, v) {
 			t.Fatalf("get %d: %v", i, err)
 		}
 	}
@@ -148,7 +148,7 @@ func TestSeqInterleaved(t *testing.T) {
 		r := rand.New(rand.NewPCG(seed, 1))
 		for i := range 500 {
 			k, v := dbtest.Gen(i)
-			d.Put(k, v, db.RNone)
+			d.Put(k, v)
 		}
 		flag := db.RFirst
 		var lastKind int
@@ -168,10 +168,10 @@ func TestSeqInterleaved(t *testing.T) {
 				flag = db.RNext
 			case 1:
 				k, v := dbtest.Gen(500 + r.IntN(1500))
-				d.Put(k, v, db.RNone)
+				d.Put(k, v)
 			case 2:
 				k, _ := dbtest.Gen(500 + r.IntN(1500))
-				d.Del(k, db.RNone)
+				d.Delete(k)
 			}
 			if op%100 == 0 {
 				if err := d.check(); err != nil {

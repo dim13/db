@@ -49,7 +49,7 @@ func FuzzOpen(f *testing.F) {
 	d := open(f, name, &Info{PageSize: 512})
 	for i := range 40 {
 		k, v := dbtest.Gen(i)
-		if _, err := d.Put(k, v, db.RNone); err != nil {
+		if err := d.Put(k, v); err != nil {
 			f.Fatal(err)
 		}
 	}
@@ -83,7 +83,7 @@ func FuzzOpen(f *testing.F) {
 			if err != nil {
 				return
 			}
-			d.Get(k, db.RNone)
+			d.Get(k)
 			flag = db.RNext
 		}
 	})
