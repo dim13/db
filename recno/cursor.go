@@ -87,21 +87,28 @@ func (c *Cursor) Err() error   { return c.err }
 // Put replaces the record at the cursor, or returns ErrNotFound if deletes
 // moved it past the last record.
 func (c *Cursor) Put(data []byte) error {
-	if c.r == nil || c.n == 0 || c.deleted {
+	switch {
+	case c.r == nil || c.n == 0:
 		return db.ErrInvalid
+	case c.deleted:
+		return db.ErrNotFound
 	}
 	if _, err := c.r.put(c.n, data, putCursor); err != nil {
 		return err
 	}
-	c.data = slices.Clone(data)
+	// Keep what was stored, which is padded for fixed-length records.
+	c.data, _ = c.r.t.pad(slices.Clone(data))
 	return nil
 }
 
 // Delete deletes the record at the cursor; Next moves to the one after
 // it, Prev to the one before.
 func (c *Cursor) Delete() error {
-	if c.r == nil || c.n == 0 || c.deleted {
+	switch {
+	case c.r == nil || c.n == 0:
 		return db.ErrInvalid
+	case c.deleted:
+		return db.ErrNotFound
 	}
 	if err := c.r.Delete(c.n); err != nil {
 		return err

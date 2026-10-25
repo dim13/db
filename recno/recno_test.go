@@ -284,3 +284,32 @@ func TestReadOnlyReader(t *testing.T) {
 		t.Errorf("got %v, want %v", err, db.ErrReadOnly)
 	}
 }
+
+// TestGetDeleteRace reads a partly read flat file while records are
+// deleted; the first half always exists.  Run with -race.
+func TestGetDeleteRace(t *testing.T) {
+	const n = 20000
+	name := filepath.Join(t.TempDir(), "test.dat")
+	var b []byte
+	for i := range n {
+		b = fmt.Appendf(b, "r%d\n", i)
+	}
+	os.WriteFile(name, b, 0644)
+	d := open(t, name, nil)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range n / 2 {
+			if err := d.Delete(1); err != nil {
+				t.Error(err)
+				return
+			}
+		}
+	}()
+	for k := n / 2; k > 0; k -= 97 {
+		if _, err := d.Get(k); err != nil {
+			t.Errorf("get %d: %v", k, err)
+		}
+	}
+	<-done
+}

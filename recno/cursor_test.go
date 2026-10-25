@@ -1,6 +1,7 @@
 package recno
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -222,5 +223,53 @@ func TestCursorDelete(t *testing.T) {
 	c.Close()
 	if c.First() || !errors.Is(c.Err(), db.ErrInvalid) {
 		t.Errorf("closed: got %v, want %v", c.Err(), db.ErrInvalid)
+	}
+}
+
+func TestCursorDeleteTwice(t *testing.T) {
+	d := fill(t, 3)
+	c := d.Cursor()
+	defer c.Close()
+	c.Seek(2)
+	if err := c.Delete(); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Delete(); !errors.Is(err, db.ErrNotFound) {
+		t.Errorf("delete: got %v, want %v", err, db.ErrNotFound)
+	}
+	if err := c.Put([]byte("x")); !errors.Is(err, db.ErrNotFound) {
+		t.Errorf("put: got %v, want %v", err, db.ErrNotFound)
+	}
+	c.Close()
+	if err := c.Delete(); !errors.Is(err, db.ErrInvalid) {
+		t.Errorf("closed delete: got %v, want %v", err, db.ErrInvalid)
+	}
+	if err := c.Put([]byte("x")); !errors.Is(err, db.ErrInvalid) {
+		t.Errorf("closed put: got %v, want %v", err, db.ErrInvalid)
+	}
+}
+
+func TestCursorPutFixedLen(t *testing.T) {
+	d, err := New(nil, &Info{RecordLen: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Put(1, []byte("a")); err != nil {
+		t.Fatal(err)
+	}
+	c := d.Cursor()
+	defer c.Close()
+	if !c.First() {
+		t.Fatal(c.Err())
+	}
+	if err := c.Put([]byte("abc")); err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.Get(c.Num())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(c.Data(), got) || len(got) != 8 {
+		t.Errorf("cursor %q, Get %q", c.Data(), got)
 	}
 }

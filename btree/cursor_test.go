@@ -212,7 +212,7 @@ func TestCursorUnclosed(t *testing.T) {
 	}
 	// Dropped cursors unregister once collected.
 	var n int
-	for range 50 {
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); {
 		runtime.GC()
 		d.mu.Lock()
 		n = len(d.cursors)

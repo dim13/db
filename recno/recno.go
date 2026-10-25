@@ -62,7 +62,10 @@ type DB struct {
 // New opens a database of the records in a flat text file, or an
 // in-memory one if file is nil.  Records are read from the file as needed
 // and written back by Sync or Close, so the caller must Close the
-// database, which leaves r and Info.BTree open.
+// database, which leaves r and Info.BTree open.  A non-regular *os.File
+// (a pipe) is read without being written back, so changes stay in memory;
+// an io.Reader that is not a recno.File is read-only, Put returns
+// db.ErrReadOnly.
 func New(r io.Reader, info *Info) (*DB, error) {
 	var bfile db.Storage
 	var psize, cache int
@@ -181,18 +184,16 @@ func (r *DB) Get(n int) (data []byte, err error) {
 	}
 
 	// Reading more of the flat file changes the tree, so it needs the
-	// write lock.
+	// write lock; load checks again under it.
 	t.mu.RLock()
-	more := nrec > t.nrecs && t.flags.IsClr(rEOF|rInMem)
-	t.mu.RUnlock()
-	if more {
+	if nrec > t.nrecs && t.flags.IsClr(rEOF|rInMem) {
+		t.mu.RUnlock()
 		t.mu.Lock()
 		defer t.mu.Unlock()
 		if err := t.load(nrec); err != nil {
 			return nil, err
 		}
 	} else {
-		t.mu.RLock()
 		defer t.mu.RUnlock()
 	}
 	defer t.done(&err)
@@ -250,11 +251,8 @@ func (r *DB) put(n int, data []byte, mode putMode) (_ int, err error) {
 	}
 
 	// Fixed-length records are padded with bval; longer ones are rejected.
-	if t.flags.IsSet(rFixLen) && len(data) != t.reclen {
-		if len(data) > t.reclen {
-			return 0, db.ErrInvalid
-		}
-		data = append(bytes.Clone(data), bytes.Repeat([]byte{t.bval}, t.reclen-len(data))...)
+	if data, err = t.pad(data); err != nil {
+		return 0, err
 	}
 
 	var nrec uint32
@@ -305,6 +303,17 @@ func (r *DB) put(n int, data []byte, mode putMode) (_ int, err error) {
 	}
 	t.flags.Set(rModified)
 	return int(nrec), nil
+}
+
+// pad pads a fixed-length record with bval, and rejects a longer one.
+func (t *tree) pad(data []byte) ([]byte, error) {
+	if t.flags.IsClr(rFixLen) || len(data) == t.reclen {
+		return data, nil
+	}
+	if len(data) > t.reclen {
+		return nil, db.ErrInvalid
+	}
+	return append(bytes.Clone(data), bytes.Repeat([]byte{t.bval}, t.reclen-len(data))...), nil
 }
 
 // iput stores data at 0-based position nrec as mode directs, splitting
