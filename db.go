@@ -11,15 +11,6 @@ import (
 	"iter"
 )
 
-// Mode selects what DBM.Store does with an existing key.
-type Mode int
-
-// Store modes
-const (
-	DBMInsert  Mode = iota // keep existing data, return ErrKeyExist
-	DBMReplace             // overwrite existing data
-)
-
 // Errors returned by the access methods, to be checked with errors.Is.
 var (
 	ErrNotFound = errors.New("not found")      // key not found or no more keys
@@ -30,6 +21,15 @@ var (
 	ErrOverflow = errors.New("out of overflow pages, increase page size")
 	ErrNoPage   = fmt.Errorf("%w: no such page", ErrFormat) // link past end of file
 	ErrPageType = fmt.Errorf("%w: page type", ErrFormat)    // unexpected page type
+)
+
+// Mode selects what DBM.Store does with an existing key.
+type Mode int
+
+// Store modes
+const (
+	DBMInsert  Mode = iota // keep existing data, return ErrKeyExist
+	DBMReplace             // overwrite existing data
 )
 
 // Storage is the file a database lives in, an *os.File for instance.  The
