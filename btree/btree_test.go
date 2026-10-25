@@ -15,32 +15,15 @@ import (
 // testDB adds Scan to DB for dbtest.
 type testDB struct{ *DB }
 
-// delCursor and putCursor have no public method until cursors return.
-func delCursor(d *DB) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.del(nil, db.RCursor)
-}
-
-func putCursor(d *DB, key, data []byte) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.put(key, data, db.RCursor)
-}
-
 func (t testDB) Scan(yield func(key, data []byte) bool) error {
-	for flag := db.RFirst; ; flag = db.RNext {
-		k, v, err := t.DB.Seq(nil, flag)
-		if errors.Is(err, db.ErrNotFound) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
+	c := t.Cursor()
+	defer c.Close()
+	for k, v := range c.All() {
 		if !yield(k, v) {
-			return nil
+			break
 		}
 	}
+	return c.Err()
 }
 
 func open(t testing.TB, name string, info *Info) *DB {
@@ -109,38 +92,34 @@ func TestDup(t *testing.T) {
 			}
 		}
 	}
-	k, v, err := d.Seq([]byte("b"), db.RCursor)
-	if err != nil || string(k) != "b" {
-		t.Fatalf("seq cursor: %q %q %v", k, v, err)
+	c := d.Cursor()
+	defer c.Close()
+	if !c.Seek([]byte("b")) || string(c.Key()) != "b" {
+		t.Fatalf("seek: %q %q %v", c.Key(), c.Data(), c.Err())
 	}
 	// first b, as order of duplicates is not preserved
-	if _, pv, _ := d.Seq(nil, db.RPrev); string(pv) != "a000" && pv[0] != 'a' {
-		t.Fatalf("before first b: %q", pv)
+	if c.Prev(); c.Data()[0] != 'a' {
+		t.Fatalf("before first b: %q", c.Data())
 	}
-	d.Seq([]byte("b"), db.RCursor)
+	c.Seek([]byte("b"))
 	// delete every other b through the cursor
 	var n int
-	for err == nil && string(k) == "b" {
+	for ok := true; ok && string(c.Key()) == "b"; ok = c.Next() {
 		if n%2 == 0 {
-			if err := delCursor(d); err != nil {
+			if err := c.Delete(); err != nil {
 				t.Fatal(err)
 			}
 		}
 		n++
-		k, _, err = d.Seq(nil, db.RNext)
 	}
-	if n != 300 || string(k) != "c" {
-		t.Fatalf("got %d b's then %q", n, k)
+	if n != 300 || string(c.Key()) != "c" {
+		t.Fatalf("got %d b's then %q", n, c.Key())
 	}
 	if err := d.Delete([]byte("a")); err != nil {
 		t.Fatal(err)
 	}
 	counts := map[string]int{}
-	for flag := db.RFirst; ; flag = db.RNext {
-		k, _, err := d.Seq(nil, flag)
-		if err == db.ErrNotFound {
-			break
-		}
+	for k := range c.All() {
 		counts[string(k)]++
 	}
 	if fmt.Sprint(counts) != "map[b:150 c:300]" {
@@ -163,10 +142,12 @@ func TestPutNew(t *testing.T) {
 	if got, _ := d.Get(k); string(got) != "a" {
 		t.Errorf("got %q, want %q", got, "a")
 	}
-	if _, v, _ := d.Seq(nil, db.RLast); string(v) != "a" {
-		t.Errorf("got %q", v)
+	c := d.Cursor()
+	defer c.Close()
+	if c.Last(); string(c.Data()) != "a" {
+		t.Errorf("got %q", c.Data())
 	}
-	if err := putCursor(d, k, []byte("w")); err != nil {
+	if err := c.Put([]byte("w")); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := d.Get(k); string(got) != "w" {

@@ -73,23 +73,29 @@ type epg struct {
 	index int
 }
 
-// cursor is the sequential scan position used by Seq.
+// cursor is the position of a Cursor, kept on its record as the tree
+// changes.
 type cursor struct {
 	pg    epgno  // current record
-	key   []byte // key to relocate by, or nil
+	key   []byte // its key, to relocate by
 	flags flags.Set[uint8]
 }
 
+// on reports if the cursor sits on record index of page pgno.
+func (c *cursor) on(pgno uint32, index int) bool {
+	return c.flags.IsSet(cursInit) && c.flags.IsClr(cursAcquire) &&
+		c.pg.pgno == pgno && c.pg.index == index
+}
+
 // DB is an open B-Tree database, safe for concurrent use: Get calls run in
-// parallel, other methods one at a time; Seq has a single cursor shared
-// by all callers.
+// parallel, other methods one at a time.
 type DB struct {
 	mu       sync.RWMutex // Get reads, everything else writes
 	mp       *mpool
 	o        binary.ByteOrder
 	file     db.Storage
 	cur      epg
-	cursor   cursor
+	cursors  []*cursor
 	stack    []epgno
 	leaf     uint32 // leaf page the stack leads to
 	free     uint32 // head of the free list
@@ -631,7 +637,7 @@ func (t *DB) Put(key, data []byte) (err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	defer t.done(&err)
-	return t.put(key, data, db.RNone)
+	return t.put(key, data, nil, false)
 }
 
 // PutNew stores data under key, or returns ErrKeyExist if key is present.
@@ -639,25 +645,23 @@ func (t *DB) PutNew(key, data []byte) (err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	defer t.done(&err)
-	return t.put(key, data, db.RNoOverwrite)
+	return t.put(key, data, nil, true)
 }
 
 // put inserts key/data, moving oversized items to overflow pages and splitting
-// the page if it is full; callers hold t.mu for writing.
-func (t *DB) put(key, data []byte, flag db.Flag) error {
+// the page if it is full.  With c it replaces the record at c, with
+// noOverwrite it fails on an existing key.  Callers hold t.mu for writing.
+func (t *DB) put(key, data []byte, c *cursor, noOverwrite bool) error {
 	if t.flags.IsSet(bRdOnly) {
 		return db.ErrReadOnly
 	}
-	switch flag {
-	case db.RNone, db.RNoOverwrite:
-	case db.RCursor:
-		// The cursor must sit on a live record.
-		if t.cursor.flags.IsSet(cursInit) && t.cursor.flags.IsClr(cursAcquire|cursAfter|cursBefore) {
-			break
+	if c != nil {
+		switch {
+		case c.flags.IsClr(cursInit):
+			return db.ErrInvalid
+		case c.flags.IsSet(cursAcquire | cursAfter | cursBefore):
+			return db.ErrNotFound
 		}
-		fallthrough
-	default:
-		return db.ErrInvalid
 	}
 
 	// Oversized items go to overflow pages. The key moves only if it is
@@ -690,17 +694,14 @@ func (t *DB) put(key, data []byte, flag db.Flag) error {
 
 	var h page
 	var index int
-	switch flag {
-	case db.RCursor:
-		var err error
-		if h, err = t.get(t.cursor.pg.pgno); err != nil {
+	var replace bool
+	if c != nil {
+		// A split needs the parent stack.
+		if h, err = t.stkacq(skey, c.pg.pgno); err != nil {
 			return err
 		}
-		index = t.cursor.pg.index
-		if err := t.dleaf(skey, h, index); err != nil {
-			return err
-		}
-	default:
+		index, replace = c.pg.index, true
+	} else {
 		// Try the sorted-insert shortcut before a full search.
 		var e *epg
 		var exact bool
@@ -708,30 +709,42 @@ func (t *DB) put(key, data []byte, flag db.Flag) error {
 			e, exact = t.fast(skey, key, data)
 		}
 		if e == nil {
-			var err error
 			if e, exact, err = t.search(skey); err != nil {
 				return err
 			}
 		}
 		h, index = e.page, e.index
-
 		switch {
-		case flag == db.RNoOverwrite && exact:
+		case noOverwrite && exact:
 			return db.ErrKeyExist
-		case flag != db.RNoOverwrite && exact && t.flags.IsSet(bNoDups):
-			// Replace in place; the record is written right below, even
-			// if the delete emptied the page.
-			if err := t.dleaf(skey, h, index); err != nil {
-				return err
+		case exact && t.flags.IsSet(bNoDups):
+			replace = true
+		}
+	}
+
+	// Replace in place; the record is written right below, even if the
+	// delete emptied the page.  Cursors on it stay there, hidden from
+	// the moves until then.
+	var pinned []*cursor
+	if replace {
+		for _, o := range t.cursors {
+			if o.on(h.pgno(), index) {
+				o.flags.Set(cursAcquire)
+				pinned = append(pinned, o)
 			}
+		}
+		if err := t.dleaf(h, index); err != nil {
+			return err
 		}
 	}
 
 	nbytes := nbleafdbt(len(key), len(data))
 	if h.upper()-h.lower() < nbytes+2 {
-		if err := t.split(h, key, data, dflags, nbytes, index); err != nil {
+		at, err := t.split(h, key, data, dflags, nbytes, index)
+		if err != nil {
 			return err
 		}
+		t.pin(pinned, at)
 		t.flags.Set(bModified)
 		return nil
 	}
@@ -742,10 +755,13 @@ func (t *DB) put(key, data []byte, flag db.Flag) error {
 	h.writeBLeaf(h.upper(), key, data, dflags)
 
 	// Records from index on have shifted up by one.
-	if t.cursor.flags.IsSet(cursInit) && t.cursor.flags.IsClr(cursAcquire) &&
-		t.cursor.pg.pgno == h.pgno() && t.cursor.pg.index >= index {
-		t.cursor.pg.index++
+	for _, o := range t.cursors {
+		if o.flags.IsSet(cursInit) && o.flags.IsClr(cursAcquire) &&
+			o.pg.pgno == h.pgno() && o.pg.index >= index {
+			o.pg.index++
+		}
 	}
+	t.pin(pinned, epgno{pgno: h.pgno(), index: index})
 
 	if t.order == orderNot {
 		if h.nextpg() == pInvalid {
@@ -764,6 +780,14 @@ func (t *DB) put(key, data []byte, flag db.Flag) error {
 	t.dirty(h)
 	t.flags.Set(bModified)
 	return nil
+}
+
+// pin puts cursors back on their replaced record, now at at.
+func (t *DB) pin(cursors []*cursor, at epgno) {
+	for _, c := range cursors {
+		c.flags.Clr(cursAcquire)
+		c.pg = at
+	}
 }
 
 // fast tries to place key next to the previous insert, which pays off when

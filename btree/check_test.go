@@ -79,17 +79,22 @@ func TestDupCheck(t *testing.T) {
 			}
 		}
 	}
-	k, _, err := tr.Seq([]byte("b"), db.RCursor)
-	for n := 0; err == nil && string(k) == "b"; n++ {
+	c := tr.Cursor()
+	defer c.Close()
+	var n int
+	for k := range c.From([]byte("b")) {
+		if string(k) != "b" {
+			break
+		}
 		if n%2 == 0 {
-			if err := delCursor(tr); err != nil {
+			if err := c.Delete(); err != nil {
 				t.Fatal(err)
 			}
 			if err := tr.check(); err != nil {
 				t.Fatalf("cursor del %d: %v", n, err)
 			}
 		}
-		k, _, err = tr.Seq(nil, db.RNext)
+		n++
 	}
 	if err := tr.Delete([]byte("a")); err != nil {
 		t.Fatal(err)
@@ -150,22 +155,19 @@ func TestSeqInterleaved(t *testing.T) {
 			k, v := dbtest.Gen(i)
 			d.Put(k, v)
 		}
-		flag := db.RFirst
+		c := d.Cursor()
 		var lastKind int
 		for op := range 3000 {
 			kind := r.IntN(3)
 			lastKind = kind
 			switch kind {
 			case 0:
-				_, _, err := d.Seq(nil, flag)
-				if errors.Is(err, db.ErrNotFound) {
-					flag = db.RFirst
-					continue
+				if !c.Next() {
+					if err := c.Err(); err != nil {
+						t.Fatal(seed, op, err)
+					}
+					c.First()
 				}
-				if err != nil {
-					t.Fatal(seed, op, err)
-				}
-				flag = db.RNext
 			case 1:
 				k, v := dbtest.Gen(500 + r.IntN(1500))
 				d.Put(k, v)
@@ -178,7 +180,7 @@ func TestSeqInterleaved(t *testing.T) {
 					t.Fatal(seed, op, err)
 				}
 			}
-			if c := d.cursor; c.flags.IsSet(cursInit) && c.flags.IsClr(cursAcquire) {
+			if c := c.c; c.flags.IsSet(cursInit) && c.flags.IsClr(cursAcquire) {
 				h, _ := d.get(c.pg.pgno)
 				if !h.isType(pBLeaf) || c.pg.index < 0 || c.pg.index >= h.nextIndex() {
 					t.Fatalf("seed %d op %d (kind %d): cursor %+v flags %x on page type %x n=%d", seed, op, lastKind, c.pg, c.flags, h.flags(), h.nextIndex())

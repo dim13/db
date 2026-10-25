@@ -1,11 +1,9 @@
 package btree_test
 
 import (
-	"errors"
 	"fmt"
 	"log"
 
-	"github.com/dim13/db"
 	"github.com/dim13/db/btree"
 )
 
@@ -25,15 +23,13 @@ func Example() {
 	v, err := d.Get([]byte("banana"))
 	fmt.Printf("%s %v\n", v, err)
 
-	for flag := db.RFirst; ; flag = db.RNext {
-		k, v, err := d.Seq(nil, flag)
-		if errors.Is(err, db.ErrNotFound) {
-			break
-		}
-		if err != nil {
-			log.Fatal(err)
-		}
+	c := d.Cursor()
+	defer c.Close()
+	for k, v := range c.All() {
 		fmt.Printf("%s=%s\n", k, v)
+	}
+	if err := c.Err(); err != nil {
+		log.Fatal(err)
 	}
 	// Output:
 	// b <nil>
@@ -42,16 +38,16 @@ func Example() {
 	// cherry=c
 }
 
-func ExampleDB_Seq() {
+func ExampleCursor_From() {
 	d, _ := btree.New(nil, nil)
 	defer d.Close()
 	for _, k := range []string{"a1", "b1", "b2", "c1"} {
 		d.Put([]byte(k), nil)
 	}
 
-	// Position at the first key not less than "b".
-	k, _, err := d.Seq([]byte("b"), db.RCursor)
-	for ; err == nil; k, _, err = d.Seq(nil, db.RNext) {
+	c := d.Cursor()
+	defer c.Close()
+	for k := range c.From([]byte("b")) {
 		fmt.Printf("%s\n", k)
 	}
 	// Output:

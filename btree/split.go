@@ -3,27 +3,27 @@ package btree
 import "github.com/dim13/db"
 
 // split splits page sp and inserts key/data with flags at index skip,
-// ilen is the insert length.
-func (t *DB) split(sp page, key, data []byte, flags byte, ilen, skip int) error {
+// ilen is the insert length.  It returns where the item went.
+func (t *DB) split(sp page, key, data []byte, flags byte, ilen, skip int) (at epgno, err error) {
 	// h is the half that receives the new item, skip its slot there.
 	var h, l, r page
-	var err error
 	if sp.pgno() == pRoot {
 		if h, l, r, err = t.root(sp, &skip, ilen); err != nil {
-			return err
+			return at, err
 		}
 	} else if h, l, r, err = t.bpage(sp, &skip, ilen); err != nil {
-		return err
+		return at, err
 	}
 
 	h.setUpper(h.upper() - ilen)
 	h.setLinp(skip, h.upper())
 	h.writeBLeaf(h.upper(), key, data, flags)
+	at = epgno{pgno: h.pgno(), index: skip}
 
 	// The root keeps its page number, so rebuild it over l and r.
 	if sp.pgno() == pRoot {
 		if err := t.broot(sp, l, r); err != nil {
-			return err
+			return at, err
 		}
 	}
 
@@ -37,7 +37,7 @@ func (t *DB) split(sp page, key, data []byte, flags byte, ilen, skip int) error 
 		lchild, rchild := l, r
 
 		if h, err = t.get(parent.pgno); err != nil {
-			return err
+			return at, err
 		}
 
 		// The new right page follows the old one in the parent.
@@ -68,7 +68,7 @@ func (t *DB) split(sp page, key, data []byte, flags byte, ilen, skip int) error 
 				}
 			}
 		default:
-			return db.ErrPageType
+			return at, db.ErrPageType
 		}
 
 		var parentsplit bool
@@ -76,10 +76,10 @@ func (t *DB) split(sp page, key, data []byte, flags byte, ilen, skip int) error 
 			sp = h
 			if h.pgno() == pRoot {
 				if h, l, r, err = t.root(h, &skip, nbytes); err != nil {
-					return err
+					return at, err
 				}
 			} else if h, l, r, err = t.bpage(h, &skip, nbytes); err != nil {
-				return err
+				return at, err
 			}
 			parentsplit = true
 		} else {
@@ -100,7 +100,7 @@ func (t *DB) split(sp page, key, data []byte, flags byte, ilen, skip int) error 
 			h.writeBInternal(h.upper(), ksize, rchild.pgno(), bl.flags&pBigKey, bl.key)
 			if bl.flags&pBigKey != 0 {
 				if err := t.preserve(t.o.Uint32(bl.key)); err != nil {
-					return err
+					return at, err
 				}
 			}
 		}
@@ -113,7 +113,7 @@ func (t *DB) split(sp page, key, data []byte, flags byte, ilen, skip int) error 
 		// Parent split too; rebuild it if it was the root.
 		if sp.pgno() == pRoot {
 			if err := t.broot(sp, l, r); err != nil {
-				return err
+				return at, err
 			}
 		}
 		t.dirty(lchild)
@@ -121,7 +121,7 @@ func (t *DB) split(sp page, key, data []byte, flags byte, ilen, skip int) error 
 	}
 	t.dirty(l)
 	t.dirty(r)
-	return nil
+	return at, nil
 }
 
 // bpage splits non-root page h into h and a new right sibling.
@@ -289,10 +289,12 @@ func (t *DB) psplit(h, l, r page, pskip *int, ilen int) (left bool, err error) {
 	// off is the last slot on l, nxt the first item of h going to r.
 	l.setLower(l.lower() + (off+1)*2)
 
-	// Keep the cursor on its record. Unlike 1.85, count the open slot too
+	// Keep the cursors on their records. Unlike 1.85, count the open slot too
 	// when it is on the left page, which holds off+1 entries.
-	c := &t.cursor
-	if c.flags.IsSet(cursInit) && c.pg.pgno == h.pgno() {
+	for _, c := range t.cursors {
+		if c.flags.IsClr(cursInit) || c.flags.IsSet(cursAcquire) || c.pg.pgno != h.pgno() {
+			continue
+		}
 		if c.pg.index >= skip {
 			c.pg.index++
 		}

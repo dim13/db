@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/dim13/db"
 	"github.com/dim13/db/internal/dbtest"
 )
 
@@ -77,14 +76,13 @@ func FuzzOpen(f *testing.F) {
 		}
 		defer d.Close()
 		// Bounded, corrupt page links may form a cycle.
-		flag := db.RFirst
+		c := d.Cursor()
+		defer c.Close()
 		for range 1000 {
-			k, _, err := d.Seq(nil, flag)
-			if err != nil {
+			if !c.Next() {
 				return
 			}
-			d.Get(k)
-			flag = db.RNext
+			d.Get(c.Key())
 		}
 	})
 }

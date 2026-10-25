@@ -14,19 +14,47 @@ import (
 )
 
 // btreeDB gives btree the db.DB flag API.
-type btreeDB struct{ *btree.DB }
+type btreeDB struct {
+	*btree.DB
+	c *btree.Cursor
+}
 
 func (b btreeDB) Put(k, v []byte, _ db.Flag) ([]byte, error) { return k, b.DB.Put(k, v) }
 func (b btreeDB) Get(k []byte, _ db.Flag) ([]byte, error)    { return b.DB.Get(k) }
 func (b btreeDB) Del(k []byte, _ db.Flag) error              { return b.DB.Delete(k) }
 func (b btreeDB) Sync(db.Flag) error                         { return b.DB.Sync() }
 
+func (b btreeDB) Seq(k []byte, flag db.Flag) ([]byte, []byte, error) {
+	var ok bool
+	switch flag {
+	case db.RCursor:
+		ok = b.c.Seek(k)
+	case db.RFirst:
+		ok = b.c.First()
+	case db.RLast:
+		ok = b.c.Last()
+	case db.RNext:
+		ok = b.c.Next()
+	case db.RPrev:
+		ok = b.c.Prev()
+	default:
+		return nil, nil, db.ErrInvalid
+	}
+	if !ok {
+		if err := b.c.Err(); err != nil {
+			return nil, nil, err
+		}
+		return nil, nil, db.ErrNotFound
+	}
+	return b.c.Key(), b.c.Data(), nil
+}
+
 func newBtree(f *os.File, i *btree.Info) (db.DB, error) {
 	d, err := btree.New(f, i)
 	if err != nil {
 		return nil, err
 	}
-	return btreeDB{d}, nil
+	return btreeDB{DB: d, c: d.Cursor()}, nil
 }
 
 func TestMk(t *testing.T) {

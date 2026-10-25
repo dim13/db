@@ -7,27 +7,23 @@ func (t *DB) Delete(key []byte) (err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	defer t.done(&err)
-	return t.del(key, db.RNone)
+	return t.del(key, nil)
 }
 
-// del deletes all entries with key, or with RCursor the entry at the
-// cursor; callers hold t.mu for writing.
-func (t *DB) del(key []byte, flag db.Flag) (err error) {
+// del deletes all entries with key, or with c the entry at c; callers
+// hold t.mu for writing.
+func (t *DB) del(key []byte, c *cursor) (err error) {
 	if t.flags.IsSet(bRdOnly) {
 		return db.ErrReadOnly
 	}
-	switch flag {
-	case db.RNone:
+	switch {
+	case c == nil:
 		err = t.bdelete(key)
-	case db.RCursor:
-		// The cursor must sit on a live record.
-		c := &t.cursor
-		if c.flags.IsClr(cursInit) {
-			return db.ErrInvalid
-		}
-		if c.flags.IsSet(cursAcquire | cursAfter | cursBefore) {
-			return db.ErrNotFound
-		}
+	case c.flags.IsClr(cursInit):
+		return db.ErrInvalid
+	case c.flags.IsSet(cursAcquire | cursAfter | cursBefore):
+		return db.ErrNotFound
+	default:
 		h, err := t.get(c.pg.pgno)
 		if err != nil {
 			return err
@@ -38,7 +34,7 @@ func (t *DB) del(key []byte, flag db.Flag) (err error) {
 				return err
 			}
 		}
-		if err := t.dleaf(nil, h, c.pg.index); err != nil {
+		if err := t.dleaf(h, c.pg.index); err != nil {
 			return err
 		}
 		t.dirty(h)
@@ -47,8 +43,6 @@ func (t *DB) del(key []byte, flag db.Flag) (err error) {
 				return err
 			}
 		}
-	default:
-		return db.ErrInvalid
 	}
 	if err == nil {
 		t.flags.Set(bModified)
@@ -176,7 +170,7 @@ func (t *DB) bdelete(key []byte) error {
 		var redo bool
 		h := e.page
 		for {
-			if err := t.dleaf(key, h, e.index); err != nil {
+			if err := t.dleaf(h, e.index); err != nil {
 				return err
 			}
 			t.dirty(h)
@@ -208,7 +202,7 @@ func (t *DB) bdelete(key []byte) error {
 			} else if !eq {
 				break
 			}
-			if err := t.dleaf(key, h, e.index); err != nil {
+			if err := t.dleaf(h, e.index); err != nil {
 				return err
 			}
 			if e.index == 0 {
@@ -295,14 +289,14 @@ func (t *DB) pdelete(h page) error {
 }
 
 // dleaf removes record index from leaf h, releasing its overflow pages
-// and keeping the cursor consistent.
-func (t *DB) dleaf(key []byte, h page, index int) error {
-	c := &t.cursor
-	// The cursor's record is going away; reposition or detach it first.
-	if c.flags.IsSet(cursInit) && c.flags.IsClr(cursAcquire) &&
-		c.pg.pgno == h.pgno() && c.pg.index == index {
-		if err := t.curdel(key, h, index); err != nil {
-			return err
+// and keeping the cursors consistent.
+func (t *DB) dleaf(h page, index int) error {
+	// A cursor's record is going away; reposition or detach it first.
+	for _, c := range t.cursors {
+		if c.on(h.pgno(), index) {
+			if err := t.curdel(c, h, index); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -320,32 +314,21 @@ func (t *DB) dleaf(key []byte, h page, index int) error {
 	h.removeItem(index, nbleafdbt(bl.ksize, bl.dsize))
 
 	// Records after index have shifted down by one.
-	if c.flags.IsSet(cursInit) && c.flags.IsClr(cursAcquire) &&
-		c.pg.pgno == h.pgno() && c.pg.index > index {
-		c.pg.index--
+	for _, c := range t.cursors {
+		if c.flags.IsSet(cursInit) && c.flags.IsClr(cursAcquire) &&
+			c.pg.pgno == h.pgno() && c.pg.index > index {
+			c.pg.index--
+		}
 	}
 	return nil
 }
 
-// curdel is called before the cursor's record is removed. It moves the
-// cursor to an adjacent duplicate if there is one, otherwise it saves
-// the key so the next cursor operation can find its place.
-func (t *DB) curdel(key []byte, h page, index int) error {
-	c := &t.cursor
-	c.flags.Clr(cursAfter | cursBefore | cursAcquire)
-
-	var curcopy bool
+// curdel is called before the record of cursor c is removed. It moves
+// c to an adjacent duplicate if there is one, otherwise the saved key
+// lets the next move find its place.
+func (t *DB) curdel(c *cursor, h page, index int) error {
+	c.flags.Clr(cursAfter | cursBefore)
 	if t.flags.IsClr(bNoDups) {
-		// Comparing needs the key, which a cursor delete doesn't pass.
-		if key == nil {
-			k, _, err := t.ret(epg{page: h, index: index}, true, false)
-			if err != nil {
-				return err
-			}
-			c.key = k
-			curcopy = true
-			key = c.key
-		}
 		// Check previous and next key, on this or adjacent page.
 		type cand struct {
 			pg    uint32 // page, pInvalid for h
@@ -377,7 +360,7 @@ func (t *DB) curdel(key []byte, h page, index int) error {
 					e.index = pg.nextIndex() - 1
 				}
 			}
-			eq, err := t.equal(key, e)
+			eq, err := t.equal(c.key, e)
 			if err != nil {
 				return err
 			}
@@ -387,13 +370,6 @@ func (t *DB) curdel(key []byte, h page, index int) error {
 				return nil
 			}
 		}
-	}
-	if !curcopy {
-		k, _, err := t.ret(epg{page: h, index: index}, true, false)
-		if err != nil {
-			return err
-		}
-		c.key = k
 	}
 	c.flags.Set(cursAcquire)
 	return nil
