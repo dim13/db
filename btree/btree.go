@@ -61,6 +61,16 @@ type Info struct {
 	ReadOnly       bool                  // refuse changes, never write
 }
 
+// meta is the header stored at the start of the meta page.
+type meta struct {
+	Magic   uint32
+	Version uint32
+	PSize   uint32 // page size
+	Free    uint32 // head of the free list
+	NRecs   uint32 // unused by btree, preserved
+	Flags   uint32 // bNoDups
+}
+
 // epgno references an item by page number, as kept on the descent stack.
 type epgno struct {
 	pgno  uint32
@@ -167,28 +177,30 @@ func New(file db.Storage, info *Info) (*DB, error) {
 	}
 
 	if size > 0 {
-		m := make([]byte, 24)
-		if _, err := file.ReadAt(m, 0); err != nil {
+		var m meta
+		buf := make([]byte, binary.Size(m))
+		if _, err := file.ReadAt(buf, 0); err != nil {
 			return nil, fmt.Errorf("%w: meta", db.ErrFormat)
 		}
 		switch {
-		case binary.LittleEndian.Uint32(m) == magic:
+		case binary.LittleEndian.Uint32(buf) == magic:
 			t.o = binary.LittleEndian
-		case binary.BigEndian.Uint32(m) == magic:
+		case binary.BigEndian.Uint32(buf) == magic:
 			t.o = binary.BigEndian
 		default:
 			return nil, fmt.Errorf("%w: magic", db.ErrFormat)
 		}
-		mv := page{b: m, o: t.o}
-		psize, flags := int(mv.u32(8)), mv.u32(20)
+		if _, err := binary.Decode(buf, t.o, &m); err != nil {
+			return nil, err
+		}
 		// recno trees are not btrees
-		if mv.u32(4) != version || !validPSize(psize) || flags&^bNoDups != 0 {
+		if m.Version != version || !validPSize(int(m.PSize)) || m.Flags&^bNoDups != 0 {
 			return nil, fmt.Errorf("%w: meta", db.ErrFormat)
 		}
-		b.PageSize = psize
-		t.flags.Set(flags)
-		t.free = mv.u32(12)
-		t.nrecs = mv.u32(16)
+		b.PageSize = int(m.PSize)
+		t.flags.Set(m.Flags)
+		t.free = m.Free
+		t.nrecs = m.NRecs
 	} else {
 		if b.PageSize == 0 {
 			b.PageSize = defPSize
@@ -316,20 +328,23 @@ func (t *DB) sync() error {
 	return nil
 }
 
-// writeMeta stores the tree header (magic, version, page size, free list,
-// record count and flags) in the meta page and marks it dirty.
+// writeMeta stores the tree header in the meta page and marks it dirty.
 func (t *DB) writeMeta() error {
 	b, err := t.mp.get(pMeta)
 	if err != nil {
 		return err
 	}
-	m := t.page(b)
-	m.setU32(0, magic)
-	m.setU32(4, version)
-	m.setU32(8, uint32(t.psize))
-	m.setU32(12, t.free)
-	m.setU32(16, t.nrecs)
-	m.setU32(20, t.flags.Value(bNoDups))
+	m := meta{
+		Magic:   magic,
+		Version: version,
+		PSize:   uint32(t.psize),
+		Free:    t.free,
+		NRecs:   t.nrecs,
+		Flags:   t.flags.Value(bNoDups),
+	}
+	if _, err := binary.Encode(b, t.o, m); err != nil {
+		return err
+	}
 	t.mp.dirty(pMeta)
 	return nil
 }

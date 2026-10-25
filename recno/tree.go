@@ -55,6 +55,16 @@ type epg struct {
 	index int
 }
 
+// meta is the header stored at the start of the meta page.
+type meta struct {
+	Magic   uint32
+	Version uint32
+	PSize   uint32 // page size
+	Free    uint32 // head of the free list
+	NRecs   uint32 // number of records
+	Flags   uint32 // saveMeta
+}
+
 // tree is the in-memory btree holding records.
 type tree struct {
 	mu       sync.RWMutex // Get reads, everything else writes
@@ -106,27 +116,29 @@ func openTree(file db.Storage, psize, cache int, o binary.ByteOrder) (*tree, err
 	}
 
 	if size > 0 {
-		m := make([]byte, 24)
-		if _, err := file.ReadAt(m, 0); err != nil {
+		var m meta
+		buf := make([]byte, binary.Size(m))
+		if _, err := file.ReadAt(buf, 0); err != nil {
 			return nil, fmt.Errorf("%w: meta", db.ErrFormat)
 		}
 		switch {
-		case binary.LittleEndian.Uint32(m) == magic:
+		case binary.LittleEndian.Uint32(buf) == magic:
 			t.o = binary.LittleEndian
-		case binary.BigEndian.Uint32(m) == magic:
+		case binary.BigEndian.Uint32(buf) == magic:
 			t.o = binary.BigEndian
 		default:
 			return nil, fmt.Errorf("%w: magic", db.ErrFormat)
 		}
-		mv := page{b: m, o: t.o}
-		var flags uint32
-		psize, flags = int(mv.u32(8)), mv.u32(20)
-		if mv.u32(4) != version || !validPSize(psize) || flags&^saveMeta != 0 {
+		if _, err := binary.Decode(buf, t.o, &m); err != nil {
+			return nil, err
+		}
+		psize = int(m.PSize)
+		if m.Version != version || !validPSize(psize) || m.Flags&^saveMeta != 0 {
 			return nil, fmt.Errorf("%w: meta", db.ErrFormat)
 		}
-		t.flags.Set(flags)
-		t.free = mv.u32(12)
-		t.nrecs = mv.u32(16)
+		t.flags.Set(m.Flags)
+		t.free = m.Free
+		t.nrecs = m.NRecs
 	} else {
 		if psize == 0 {
 			psize = defPSize
@@ -226,13 +238,17 @@ func (t *tree) writeMeta() error {
 	if err != nil {
 		return err
 	}
-	m := t.page(b)
-	m.setU32(0, magic)
-	m.setU32(4, version)
-	m.setU32(8, uint32(t.psize))
-	m.setU32(12, t.free)
-	m.setU32(16, t.nrecs)
-	m.setU32(20, t.flags.Value(saveMeta))
+	m := meta{
+		Magic:   magic,
+		Version: version,
+		PSize:   uint32(t.psize),
+		Free:    t.free,
+		NRecs:   t.nrecs,
+		Flags:   t.flags.Value(saveMeta),
+	}
+	if _, err := binary.Encode(b, t.o, m); err != nil {
+		return err
+	}
 	t.mp.dirty(pMeta)
 	return nil
 }
