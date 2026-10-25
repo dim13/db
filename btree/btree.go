@@ -7,7 +7,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"os"
 	"sync"
 
 	"github.com/dim13/db"
@@ -94,7 +93,7 @@ type DB struct {
 	mu       sync.RWMutex // Get reads, everything else writes
 	mp       *mpool
 	o        binary.ByteOrder
-	file     *os.File
+	file     db.Storage
 	cur      epg
 	cursor   cursor
 	stack    []epgno
@@ -117,9 +116,9 @@ func validPSize(n int) bool {
 
 // New opens a btree backed by file, or an in-memory tree if file is nil.
 // An empty file is initialized as a new tree.  Changes are kept in memory
-// until Sync or Close, so the caller must Close the tree, which also closes
-// file.
-func New(file *os.File, info *Info) (*DB, error) {
+// until Sync or Close, so the caller must Close the tree, which leaves
+// file open.
+func New(file db.Storage, info *Info) (*DB, error) {
 	var b Info
 	if info != nil {
 		b = *info
@@ -281,26 +280,11 @@ func (t *DB) pop() (epgno, bool) {
 	return e, true
 }
 
-// Close syncs the tree and closes its file.
+// Close syncs the tree, the file stays open.
 func (t *DB) Close() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if err := t.sync(); err != nil {
-		return err
-	}
-	if t.file != nil {
-		return t.file.Close()
-	}
-	return nil
-}
-
-// Fd returns the file descriptor of the backing file, or ^uintptr(0) for
-// an in-memory tree.
-func (t *DB) Fd() uintptr {
-	if t.file == nil {
-		return ^uintptr(0)
-	}
-	return t.file.Fd()
+	return t.sync()
 }
 
 // done trims the page cache after an operation, keeping the first error.

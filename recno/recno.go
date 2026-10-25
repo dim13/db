@@ -10,14 +10,20 @@ import (
 	"bytes"
 	"encoding/binary"
 	"io"
+	"io/fs"
 	"math"
-	"os"
 
 	"github.com/dim13/db"
 )
 
 // Flag is an option of Info.Flags.
 type Flag uint
+
+// File is a flat file of records that can be written back.
+type File interface {
+	db.Storage
+	Truncate(size int64) error
+}
 
 // Info flags
 const (
@@ -41,7 +47,7 @@ type Info struct {
 	ByteOrder binary.ByteOrder // byte order, nil for native
 	RecordLen int              // length of fixed-length records
 	Delimiter byte             // delimiter, newline if zero; pad byte of fixed-length records
-	BTreeFile *os.File         // btree file, nil for in-memory tree
+	BTree     db.Storage       // btree file, nil for in-memory tree
 	ReadOnly  bool             // refuse changes, never write
 }
 
@@ -55,16 +61,16 @@ type DB struct {
 // New opens a database of the records in a flat text file, or an
 // in-memory one if file is nil.  Records are read from the file as needed
 // and written back by Sync or Close, so the caller must Close the
-// database, which also closes file and Info.BTreeFile.
-func New(file *os.File, info *Info) (*DB, error) {
-	var bfile *os.File
+// database, which leaves r and Info.BTree open.
+func New(r io.Reader, info *Info) (*DB, error) {
+	var bfile db.Storage
 	var psize, cache int
 	var order binary.ByteOrder
 	if info != nil {
 		if info.Flags&^(RFixedLen|RNoKey|RSnapshot) != 0 {
 			return nil, db.ErrInvalid
 		}
-		bfile = info.BTreeFile
+		bfile = info.BTree
 		psize, cache, order = info.PageSize, info.CacheSize, info.ByteOrder
 	}
 	t, err := openTree(bfile, psize, cache, order)
@@ -92,23 +98,31 @@ func New(file *os.File, info *Info) (*DB, error) {
 		t.flags.Set(bRdOnly)
 		t.mp.noWrite = true
 	}
-	if file == nil {
-		t.flags.Set(rEOF | rInMem)
-	} else {
-		t.rfile = file
-		fi, err := file.Stat()
-		if err != nil {
+	f, isFile := r.(File)
+	var fi fs.FileInfo
+	if isFile {
+		var err error
+		if fi, err = f.Stat(); err != nil {
 			return nil, err
 		}
-		switch {
-		case !fi.Mode().IsRegular():
-			t.flags.Set(rRdOnly)
-			t.rsrc = bufio.NewReader(file)
-		case fi.Size() == 0:
-			t.flags.Set(rEOF)
-		default:
-			t.rsrc = bufio.NewReader(io.NewSectionReader(file, 0, fi.Size()))
-		}
+	}
+	switch {
+	case r == nil:
+		t.flags.Set(rEOF | rInMem)
+	case !isFile:
+		// nothing to write the records back to
+		t.flags.Set(rRdOnly | bRdOnly)
+		t.mp.noWrite = true
+		t.rsrc = bufio.NewReader(r)
+	case !fi.Mode().IsRegular():
+		t.flags.Set(rRdOnly)
+		t.rsrc = bufio.NewReader(r)
+	case fi.Size() == 0:
+		t.rfile = f
+		t.flags.Set(rEOF)
+	default:
+		t.rfile = f
+		t.rsrc = bufio.NewReader(io.NewSectionReader(f, 0, fi.Size()))
 	}
 
 	// A new root starts as a btree leaf; retype it for records.
@@ -137,8 +151,8 @@ func keyNum(key []byte) (uint32, error) {
 	return binary.NativeEndian.Uint32(key), nil
 }
 
-// Close writes changed records back to the flat file and closes it and
-// the btree file.
+// Close writes changed records back to the flat file, which stays open
+// like the btree file.
 func (r *DB) Close() error {
 	t := r.t
 	t.mu.Lock()
@@ -146,23 +160,7 @@ func (r *DB) Close() error {
 	if err := r.sync(db.RNone); err != nil {
 		return err
 	}
-	var err error
-	if t.rfile != nil {
-		err = t.rfile.Close()
-	}
-	if cerr := t.close(); err == nil {
-		err = cerr
-	}
-	return err
-}
-
-// Fd returns the file descriptor of the flat file, or ^uintptr(0) if
-// there is none.
-func (r *DB) Fd() uintptr {
-	if r.t.rfile == nil {
-		return ^uintptr(0)
-	}
-	return r.t.rfile.Fd()
+	return t.close()
 }
 
 // Get returns the record numbered key, or ErrNotFound.

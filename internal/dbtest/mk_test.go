@@ -66,5 +66,8 @@ func TestMk(t *testing.T) {
 		if err := d.Close(); err != nil {
 			t.Fatal(err)
 		}
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

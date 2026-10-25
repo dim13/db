@@ -3,11 +3,13 @@ package recno
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/dim13/db"
@@ -27,6 +29,7 @@ func open(t *testing.T, name string, info *Info) db.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { f.Close() })
 	d, err := New(f, info)
 	if err != nil {
 		t.Fatal(err)
@@ -182,6 +185,7 @@ func TestLibc(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer f.Close()
 	d, err := New(f, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -243,6 +247,7 @@ func TestReadOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer f.Close()
 	d, err := New(f, &Info{ReadOnly: true})
 	if err != nil {
 		t.Fatal(err)
@@ -262,5 +267,41 @@ func TestZeroInfo(t *testing.T) {
 			t.Errorf("info %v: got %q", info, got)
 		}
 		d.Close()
+	}
+}
+
+func TestCloseKeepsFile(t *testing.T) {
+	f, err := os.Create(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	d, err := New(f, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Stat(); err != nil {
+		t.Errorf("file closed by Close: %v", err)
+	}
+}
+
+func TestReadOnlyReader(t *testing.T) {
+	d, err := New(strings.NewReader("a\nb\n"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	got, err := d.Get(key(2), db.RNone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "b"; string(got) != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if _, err := d.Put(key(3), []byte("c"), db.RNone); !errors.Is(err, db.ErrReadOnly) {
+		t.Errorf("got %v, want %v", err, db.ErrReadOnly)
 	}
 }

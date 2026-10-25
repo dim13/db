@@ -16,6 +16,7 @@ const Suffix = ".db"
 // NextKey share a single cursor.
 type DBM struct {
 	h *hash.DB
+	f *os.File
 }
 
 // Open opens or creates name with Suffix appended.  The flag and perm are
@@ -40,12 +41,16 @@ func Open(name string, flag int, perm os.FileMode) (*DBM, error) {
 		f.Close()
 		return nil, err
 	}
-	return &DBM{h: h}, nil
+	return &DBM{h: h, f: f}, nil
 }
 
 // Close writes changes and closes the file.
 func (d *DBM) Close() error {
-	return d.h.Close()
+	err := d.h.Close()
+	if cerr := d.f.Close(); err == nil {
+		err = cerr
+	}
+	return err
 }
 
 // Fetch returns the content stored under key, or db.ErrNotFound.
@@ -81,10 +86,4 @@ func (d *DBM) FirstKey() ([]byte, error) {
 func (d *DBM) NextKey() ([]byte, error) {
 	k, _, err := d.h.Seq(nil, db.RNext)
 	return k, err
-}
-
-// DirFd returns the file descriptor of the database file, as
-// dbm_dirfno(3).
-func (d *DBM) DirFd() uintptr {
-	return d.h.Fd()
 }

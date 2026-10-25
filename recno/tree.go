@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"os"
 	"sync"
 
 	"github.com/dim13/db"
@@ -69,7 +68,7 @@ type tree struct {
 	mu       sync.RWMutex // Get reads, everything else writes
 	mp       *mpool
 	o        binary.ByteOrder
-	file     *os.File
+	file     db.Storage
 	cur      epg
 	cursor   cursor
 	stack    []epgno
@@ -79,7 +78,7 @@ type tree struct {
 	flags    flags.Set[uint32]
 
 	// recno
-	rfile  *os.File      // flat file
+	rfile  File          // flat file
 	rsrc   *bufio.Reader // record source, nil when fully read
 	nrecs  uint32
 	reclen int
@@ -92,7 +91,7 @@ func validPSize(n int) bool {
 }
 
 // openTree opens a btree backed by file, or an in-memory tree if file is nil.
-func openTree(file *os.File, psize, cache int, o binary.ByteOrder) (*tree, error) {
+func openTree(file db.Storage, psize, cache int, o binary.ByteOrder) (*tree, error) {
 	if psize != 0 && !validPSize(psize) {
 		return nil, fmt.Errorf("%w: page size %d", db.ErrInvalid, psize)
 	}
@@ -205,15 +204,9 @@ func (t *tree) pop() (epgno, bool) {
 	return e, true
 }
 
-// close syncs and closes the tree.
+// close syncs the tree.
 func (t *tree) close() error {
-	if err := t.sync(); err != nil {
-		return err
-	}
-	if t.file != nil {
-		return t.file.Close()
-	}
-	return nil
+	return t.sync()
 }
 
 // done trims the page cache after an operation, keeping the first error.

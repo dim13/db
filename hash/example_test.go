@@ -16,6 +16,7 @@ func Example() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer f.Close()
 	defer os.Remove(f.Name())
 
 	d, err := hash.New(f, nil) // an empty file creates a new table

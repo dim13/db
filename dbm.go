@@ -28,6 +28,4 @@ type DBM interface {
 	// NextKey returns the key after the one returned last, or ErrNotFound
 	// at the end.
 	NextKey() (key []byte, err error)
-	// DirFd returns the file descriptor of the database file.
-	DirFd() (fd uintptr)
 }

@@ -29,11 +29,13 @@ func TestCacheLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer f.Close()
 	bf, err := os.Create(filepath.Join(dir, "test.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	d, err := New(f, &Info{PageSize: 512, CacheSize: 1, BTreeFile: bf})
+	defer bf.Close()
+	d, err := New(f, &Info{PageSize: 512, CacheSize: 1, BTree: bf})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,11 +103,15 @@ func TestConcurrent(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			defer f.Close()
 			info := tc.info
 			if info != nil {
-				if info.BTreeFile, err = os.Create(filepath.Join(dir, "test.db")); err != nil {
+				bf, err := os.Create(filepath.Join(dir, "test.db"))
+				if err != nil {
 					t.Fatal(err)
 				}
+				defer bf.Close()
+				info.BTree = bf
 			}
 			d, err := New(f, info)
 			if err != nil {

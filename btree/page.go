@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"os"
 	"sync/atomic"
 
 	"github.com/dim13/db"
@@ -58,7 +57,7 @@ func nbleafdbt(ksize, dsize int) int {
 // mpool is a page cache over a file.  Callers hold page slices during an
 // operation, so pages are only evicted by trim between operations.
 type mpool struct {
-	file    *os.File
+	file    db.Storage
 	psize   int
 	npages  atomic.Uint32
 	noWrite bool                              // read-only, dirty pages stay cached
@@ -76,7 +75,7 @@ type cpage struct {
 // newMpool returns a page cache over file of size bytes, checking each
 // page read with check; limit is ignored (no eviction) for an in-memory
 // pool with a nil file.
-func newMpool(file *os.File, psize int, size int64, limit int, check func(uint32, []byte) error) *mpool {
+func newMpool(file db.Storage, psize int, size int64, limit int, check func(uint32, []byte) error) *mpool {
 	if file == nil {
 		limit = 0 // nowhere to evict to
 	}

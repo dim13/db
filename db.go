@@ -27,13 +27,10 @@ const (
 // parallel, other methods one at a time; Seq has a single cursor shared
 // by all callers.
 type DB interface {
-	// Close syncs the database and closes its files.
+	// Close syncs the database, it leaves the files open.
 	Close() (err error)
 	// Del deletes key, or with RCursor the entry at the cursor.
 	Del(key []byte, flag Flag) (err error)
-	// Fd returns the file descriptor, or ^uintptr(0) for an in-memory
-	// database.
-	Fd() (fd uintptr)
 	// Get returns the data stored under key, or ErrNotFound.
 	Get(key []byte, flag Flag) (data []byte, err error)
 	// Put stores data under key and returns the key it is stored under,

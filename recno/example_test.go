@@ -26,6 +26,7 @@ func Example() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer f.Close()
 	d, err := recno.New(f, nil)
 	if err != nil {
 		log.Fatal(err)

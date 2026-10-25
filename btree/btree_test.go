@@ -20,6 +20,7 @@ func open(t testing.TB, name string, info *Info) db.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { f.Close() })
 	d, err := New(f, info)
 	if err != nil {
 		t.Fatal(err)
@@ -145,6 +146,7 @@ func TestLibc(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer f.Close()
 	d, err := New(f, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -176,6 +178,7 @@ func TestReadOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer f.Close()
 	d, err := New(f, &Info{ReadOnly: true})
 	if err != nil {
 		t.Fatal(err)
@@ -241,4 +244,22 @@ func BenchmarkGet(b *testing.B) {
 			}
 		})
 	})
+}
+
+func TestCloseKeepsFile(t *testing.T) {
+	f, err := os.Create(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	d, err := New(f, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Stat(); err != nil {
+		t.Errorf("file closed by Close: %v", err)
+	}
 }

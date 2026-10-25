@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"hash"
 	"io"
-	"os"
 	"sync"
 
 	"github.com/dim13/db"
@@ -110,7 +109,7 @@ type buf struct {
 // parallel, other methods one at a time; Seq has a single cursor shared
 // by all callers.
 type DB struct {
-	file *os.File
+	file db.Storage
 	o    binary.ByteOrder
 	hdr  header
 	hash func() hash.Hash32
@@ -139,8 +138,8 @@ const (
 // New opens a hash table backed by file, or an in-memory table if file is
 // nil.  An empty file is initialized as a new table.  Changes are kept in
 // memory until Sync or Close, so the caller must Close the table, which
-// also closes file.
-func New(file *os.File, info *Info) (*DB, error) {
+// leaves file open.
+func New(file db.Storage, info *Info) (*DB, error) {
 	h := &DB{
 		file:    file,
 		hash:    newTorek,
@@ -280,26 +279,11 @@ func (h *DB) initHtab(nelem int) error {
 	return nil
 }
 
-// Close syncs the table and closes its file.
+// Close syncs the table, the file stays open.
 func (h *DB) Close() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if err := h.sync(); err != nil {
-		return err
-	}
-	if h.file != nil {
-		return h.file.Close()
-	}
-	return nil
-}
-
-// Fd returns the file descriptor of the backing file, or ^uintptr(0) for
-// an in-memory table.
-func (h *DB) Fd() uintptr {
-	if h.file == nil {
-		return ^uintptr(0)
-	}
-	return h.file.Fd()
+	return h.sync()
 }
 
 // Sync writes all changes to disk, flag must be db.RNone.

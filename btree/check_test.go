@@ -115,6 +115,7 @@ func TestCacheLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer f.Close()
 	d, err := New(f, &Info{PageSize: 512, CacheSize: 1})
 	if err != nil {
 		t.Fatal(err)

@@ -70,6 +70,7 @@ func FuzzOpen(f *testing.F) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		defer file.Close()
 		d, err := New(file, &Info{ReadOnly: true})
 		if err != nil {
 			return
