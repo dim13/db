@@ -301,3 +301,19 @@ func TestCloseKeepsFile(t *testing.T) {
 		t.Errorf("file closed by Close: %v", err)
 	}
 }
+
+func TestEncodedSizes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		v    any
+		size int
+	}{
+		{name: "leafHead", v: leafHead{}, size: leafHeadSize},
+		{name: "internalHead", v: internalHead{}, size: internalHeadSize},
+		{name: "ovfl", v: ovfl{}, size: novflSize},
+	} {
+		if got, want := binary.Size(tc.v), tc.size; got != want {
+			t.Errorf("%s: got %d, want %d", tc.name, got, want)
+		}
+	}
+}

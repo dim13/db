@@ -279,11 +279,11 @@ func (t *tree) bnew() (uint32, page, error) {
 
 // ovflGet reads the data an overflow reference points to.
 func (t *tree) ovflGet(ref []byte) ([]byte, error) {
-	if len(ref) < novflSize {
-		return nil, fmt.Errorf("%w: overflow reference", db.ErrFormat)
+	r, err := t.ovflRef(ref)
+	if err != nil {
+		return nil, err
 	}
-	pg := t.o.Uint32(ref)
-	sz := int(t.o.Uint32(ref[4:]))
+	pg, sz := r.Pgno, int(r.Size)
 	plen := t.psize - dataOff
 	if sz > int(t.mp.npages.Load())*plen {
 		return nil, fmt.Errorf("%w: overflow size %d", db.ErrFormat, sz)
@@ -332,19 +332,26 @@ func (t *tree) ovflPut(data []byte) ([]byte, error) {
 		}
 		last = h
 	}
-	ref := make([]byte, novflSize)
-	t.o.PutUint32(ref, first)
-	t.o.PutUint32(ref[4:], uint32(len(data)))
-	return ref, nil
+	return binary.Append(nil, t.o, ovfl{Pgno: first, Size: uint32(len(data))})
+}
+
+// ovflRef decodes the overflow reference in b.
+func (t *tree) ovflRef(b []byte) (ovfl, error) {
+	var r ovfl
+	if len(b) < novflSize {
+		return r, fmt.Errorf("%w: overflow reference", db.ErrFormat)
+	}
+	r.decode(b, t.o)
+	return r, nil
 }
 
 // ovflDelete frees the overflow chain behind ref.
 func (t *tree) ovflDelete(ref []byte) error {
-	if len(ref) < novflSize {
-		return fmt.Errorf("%w: overflow reference", db.ErrFormat)
+	r, err := t.ovflRef(ref)
+	if err != nil {
+		return err
 	}
-	pg := t.o.Uint32(ref)
-	sz := int(t.o.Uint32(ref[4:]))
+	pg, sz := r.Pgno, int(r.Size)
 	h, err := t.get(pg)
 	if err != nil {
 		return err
@@ -385,9 +392,9 @@ func (t *tree) checkPage(pgno uint32, b []byte) error {
 			return fmt.Errorf("%w: page %d", db.ErrPageType, pgno)
 		}
 	case pRInternal:
-		head = 8
+		head = nrInternal
 	case pRLeaf:
-		head = 5
+		head = leafHeadSize
 	default:
 		return fmt.Errorf("%w: page %d", db.ErrPageType, pgno)
 	}
@@ -400,7 +407,12 @@ func (t *tree) checkPage(pgno uint32, b []byte) error {
 		if off < upper || off+head > len(b) {
 			return fmt.Errorf("%w: page %d item %d", db.ErrFormat, pgno, i)
 		}
-		if p.isType(pRLeaf) && off+head+int(p.u32(off)) > len(b) {
+		if !p.isType(pRLeaf) {
+			continue
+		}
+		var h leafHead
+		h.decode(b[off:], t.o)
+		if off+head+int(h.DSize) > len(b) {
 			return fmt.Errorf("%w: page %d item %d", db.ErrFormat, pgno, i)
 		}
 	}

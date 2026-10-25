@@ -261,7 +261,7 @@ func (t *tree) psplit(h, l, r page, pskip *int, ilen int) (left bool, err error)
 func pageTotal(h page) uint32 {
 	var recs uint32
 	for i := range h.nextIndex() {
-		recs += h.rinternal(i).nrecs
+		recs += h.rinternal(i).NRecs
 	}
 	return recs
 }

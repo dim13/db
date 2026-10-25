@@ -436,11 +436,11 @@ func (t *tree) search(nrec uint32, op int) (*epg, error) {
 			r := h.rinternal(p.index)
 			switch op {
 			case sInsert:
-				r.nrecs++
+				r.NRecs++
 			default:
-				r.nrecs--
+				r.NRecs--
 			}
-			h.setRinternal(p.index, r.nrecs, r.pgno)
+			h.setRinternal(p.index, r.NRecs, r.Pgno)
 			t.dirty(h)
 		}
 	}
@@ -465,15 +465,15 @@ func (t *tree) lookup(nrec uint32, stack *[]epgno) (epg, error) {
 		index, top := 0, h.nextIndex()
 		for {
 			r = h.rinternal(index)
-			if index++; index == top || total+r.nrecs > nrec {
+			if index++; index == top || total+r.NRecs > nrec {
 				break
 			}
-			total += r.nrecs
+			total += r.NRecs
 		}
 		if stack != nil {
 			*stack = append(*stack, epgno{pgno: pg, index: index - 1})
 		}
-		pg = r.pgno
+		pg = r.Pgno
 	}
 }
 

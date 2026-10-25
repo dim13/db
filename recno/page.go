@@ -33,10 +33,13 @@ const (
 	pBigData = 0x01 // data is an overflow reference
 )
 
+const dataOff = 20 // page header size
+
+// Encoded sizes, checked against binary.Size in tests.
 const (
-	dataOff    = 20 // page header size
-	novflSize  = 8  // size of {pgno, size} overflow reference
-	nrInternal = 8  // size of a recno internal item
+	leafHeadSize = 5
+	nrInternal   = 8
+	novflSize    = 8
 )
 
 // mpool is a page cache over a file.  Callers hold page slices during an
@@ -63,10 +66,22 @@ type page struct {
 	o binary.ByteOrder
 }
 
-// rinternal is a decoded recno internal item: record count and child page.
+// leafHead precedes the data of a leaf item.
+type leafHead struct {
+	DSize uint32
+	Flags byte // pBigData
+}
+
+// rinternal is a recno internal item: record count and child page.
 type rinternal struct {
-	nrecs uint32
-	pgno  uint32
+	NRecs uint32
+	Pgno  uint32
+}
+
+// ovfl references an overflow chain in place of data.
+type ovfl struct {
+	Pgno uint32 // first page
+	Size uint32 // data length
 }
 
 // rleaf is a decoded recno leaf item.
@@ -77,6 +92,21 @@ type rleaf struct {
 	raw   []byte
 }
 
+// decode reads h from b; it is on the lookup path, so no reflection.
+func (h *leafHead) decode(b []byte, o binary.ByteOrder) {
+	h.DSize, h.Flags = o.Uint32(b), b[4]
+}
+
+// decode reads r from b; it is on the lookup path, so no reflection.
+func (r *rinternal) decode(b []byte, o binary.ByteOrder) {
+	r.NRecs, r.Pgno = o.Uint32(b), o.Uint32(b[4:])
+}
+
+// decode reads r from b.
+func (r *ovfl) decode(b []byte, o binary.ByteOrder) {
+	r.Pgno, r.Size = o.Uint32(b), o.Uint32(b[4:])
+}
+
 // lalign rounds n up to a multiple of 4.
 func lalign(n int) int {
 	return (n + 3) &^ 3
@@ -84,7 +114,7 @@ func lalign(n int) int {
 
 // nrleafdbt returns the aligned size of a recno leaf item holding dsize data bytes.
 func nrleafdbt(dsize int) int {
-	return lalign(4 + 1 + dsize)
+	return lalign(leafHeadSize + dsize)
 }
 
 // newMpool returns a page cache over file of size bytes, checking each
@@ -338,28 +368,26 @@ func (p page) appendItem(i int, item []byte) {
 
 // rinternal decodes recno internal item i.
 func (p page) rinternal(i int) rinternal {
-	off := p.linp(i)
-	return rinternal{
-		nrecs: p.u32(off),
-		pgno:  p.u32(off + 4),
-	}
+	var r rinternal
+	r.decode(p.b[p.linp(i):], p.o)
+	return r
 }
 
 // setRinternal overwrites recno internal item i in place.
 func (p page) setRinternal(i int, nrecs, pgno uint32) {
-	off := p.linp(i)
-	p.setU32(off, nrecs)
-	p.setU32(off+4, pgno)
+	p.writeRInternal(p.linp(i), nrecs, pgno)
 }
 
 // rleaf decodes recno leaf item i; its data and raw slices alias the page.
 func (p page) rleaf(i int) rleaf {
 	off := p.linp(i)
-	dsize := int(p.u32(off))
+	var h leafHead
+	h.decode(p.b[off:], p.o)
+	b, dsize := off+leafHeadSize, int(h.DSize)
 	return rleaf{
 		dsize: dsize,
-		flags: p.b[off+4],
-		data:  p.b[off+5 : off+5+dsize],
+		flags: h.Flags,
+		data:  p.b[b : b+dsize],
 		raw:   p.b[off : off+nrleafdbt(dsize)],
 	}
 }
@@ -378,15 +406,14 @@ func (p page) item(i int) ([]byte, error) {
 
 // writeRLeaf encodes a recno leaf item with data and flags at off.
 func (p page) writeRLeaf(off int, data []byte, flags byte) {
-	p.setU32(off, uint32(len(data)))
-	p.b[off+4] = flags
-	copy(p.b[off+5:], data)
+	h := leafHead{DSize: uint32(len(data)), Flags: flags}
+	n, _ := binary.Encode(p.b[off:], p.o, h)
+	copy(p.b[off+n:], data)
 }
 
 // writeRInternal encodes a recno internal item at off.
 func (p page) writeRInternal(off int, nrecs, pgno uint32) {
-	p.setU32(off, nrecs)
-	p.setU32(off+4, pgno)
+	binary.Encode(p.b[off:], p.o, rinternal{NRecs: nrecs, Pgno: pgno})
 }
 
 // init sets up an empty page header.

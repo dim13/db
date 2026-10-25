@@ -315,3 +315,19 @@ func TestGetDeleteRace(t *testing.T) {
 	}
 	<-done
 }
+
+func TestEncodedSizes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		v    any
+		size int
+	}{
+		{name: "leafHead", v: leafHead{}, size: leafHeadSize},
+		{name: "rinternal", v: rinternal{}, size: nrInternal},
+		{name: "ovfl", v: ovfl{}, size: novflSize},
+	} {
+		if got, want := binary.Size(tc.v), tc.size; got != want {
+			t.Errorf("%s: got %d, want %d", tc.name, got, want)
+		}
+	}
+}
