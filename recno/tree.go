@@ -43,8 +43,6 @@ const (
 	saveMeta = bNoDups | rRecno
 )
 
-const cursInit = 0x08 // cursor has a position
-
 // epgno references an item by page number, as kept on the descent stack.
 type epgno struct {
 	pgno  uint32
@@ -57,12 +55,6 @@ type epg struct {
 	index int
 }
 
-// cursor is the sequential scan position used by Seq.
-type cursor struct {
-	rcursor uint32 // current record number, 1-based
-	flags   flags.Set[uint8]
-}
-
 // tree is the in-memory btree holding records.
 type tree struct {
 	mu       sync.RWMutex // Get reads, everything else writes
@@ -70,7 +62,6 @@ type tree struct {
 	o        binary.ByteOrder
 	file     db.Storage
 	cur      epg
-	cursor   cursor
 	stack    []epgno
 	free     uint32 // head of the free page list
 	psize    int

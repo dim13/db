@@ -16,38 +16,38 @@ import (
 	"github.com/dim13/db/internal/dbtest"
 )
 
-// DB must implement db.DB.
-var _ db.DB = (*DB)(nil)
-
-// testDB adapts DB to dbtest.DB.
+// testDB adapts DB to dbtest.DB with 4-byte native-endian keys.
 type testDB struct{ *DB }
 
+// num decodes a 4-byte key, 0 if it is malformed.
+func (t testDB) num(key []byte) int {
+	if len(key) != 4 {
+		return 0
+	}
+	return int(binary.NativeEndian.Uint32(key))
+}
+
 func (t testDB) Get(key []byte) ([]byte, error) {
-	return t.DB.Get(key, db.RNone)
+	return t.DB.Get(t.num(key))
 }
 
 func (t testDB) Put(key, data []byte) error {
-	_, err := t.DB.Put(key, data, db.RNone)
-	return err
+	return t.DB.Put(t.num(key), data)
 }
 
 func (t testDB) Delete(key []byte) error {
-	return t.DB.Del(key, db.RNone)
+	return t.DB.Delete(t.num(key))
 }
 
 func (t testDB) Scan(yield func(key, data []byte) bool) error {
-	for flag := db.RFirst; ; flag = db.RNext {
-		k, v, err := t.DB.Seq(nil, flag)
-		if errors.Is(err, db.ErrNotFound) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		if !yield(k, v) {
-			return nil
+	c := t.DB.Cursor()
+	defer c.Close()
+	for n, v := range c.All() {
+		if !yield(key(n), v) {
+			break
 		}
 	}
+	return c.Err()
 }
 
 func key(n int) []byte {
@@ -68,22 +68,21 @@ func open(t *testing.T, name string, info *Info) *DB {
 	return d
 }
 
-func dump(t *testing.T, d db.DB) [][]byte {
+func dump(t *testing.T, d *DB) [][]byte {
 	t.Helper()
 	var recs [][]byte
-	for flag := db.RFirst; ; flag = db.RNext {
-		k, v, err := d.Seq(nil, flag)
-		if err == db.ErrNotFound {
-			return recs
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got, want := binary.NativeEndian.Uint32(k), uint32(len(recs)+1); got != want {
+	c := d.Cursor()
+	defer c.Close()
+	for n, v := range c.All() {
+		if got, want := n, len(recs)+1; got != want {
 			t.Fatalf("got recno %d, want %d", got, want)
 		}
 		recs = append(recs, v)
 	}
+	if err := c.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return recs
 }
 
 func TestModel(t *testing.T) {
@@ -98,7 +97,7 @@ func TestModel(t *testing.T) {
 		}
 		switch n := r.IntN(len(m) + 1); r.IntN(5) {
 		case 0, 1: // append
-			if _, err := d.Put(key(len(m)+1), data, db.RNone); err != nil {
+			if _, err := d.Append(data); err != nil {
 				t.Fatal(op, err)
 			}
 			m = append(m, data)
@@ -106,7 +105,7 @@ func TestModel(t *testing.T) {
 			if n == 0 {
 				continue
 			}
-			if _, err := d.Put(key(n), data, db.RIBefore); err != nil {
+			if err := d.InsertBefore(n, data); err != nil {
 				t.Fatal(op, err)
 			}
 			m = slices.Insert(m, n-1, data)
@@ -114,7 +113,7 @@ func TestModel(t *testing.T) {
 			if n == 0 {
 				continue
 			}
-			if _, err := d.Put(key(n), data, db.RNone); err != nil {
+			if err := d.Put(n, data); err != nil {
 				t.Fatal(op, err)
 			}
 			m[n-1] = data
@@ -122,16 +121,16 @@ func TestModel(t *testing.T) {
 			if n == 0 {
 				continue
 			}
-			if err := d.Del(key(n), db.RNone); err != nil {
+			if err := d.Delete(n); err != nil {
 				t.Fatal(op, err)
 			}
 			m = slices.Delete(m, n-1, n)
 		}
 	}
-	check := func(d db.DB) {
+	check := func(d *DB) {
 		t.Helper()
 		for i, want := range m {
-			got, err := d.Get(key(i+1), db.RNone)
+			got, err := d.Get(i + 1)
 			if err != nil || !bytes.Equal(got, want) {
 				t.Fatalf("get %d: %v", i+1, err)
 			}
@@ -166,46 +165,20 @@ func TestModel(t *testing.T) {
 func TestFixedLen(t *testing.T) {
 	name := filepath.Join(t.TempDir(), "test.dat")
 	os.WriteFile(name, []byte("aaaabbbbcc"), 0644)
-	d := open(t, name, &Info{Flags: RFixedLen, RecordLen: 4, Delimiter: ' '})
+	d := open(t, name, &Info{RecordLen: 4, Delimiter: ' '})
 	if got := dump(t, d); fmt.Sprintf("%q", got) != `["aaaa" "bbbb" "cc  "]` {
 		t.Errorf("got %q", got)
 	}
-	if _, err := d.Put(key(5), []byte("e"), db.RNone); err != nil {
+	if err := d.Put(5, []byte("e")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.Put(key(1), []byte("toolong"), db.RNone); err != db.ErrInvalid {
+	if err := d.Put(1, []byte("toolong")); !errors.Is(err, db.ErrInvalid) {
 		t.Errorf("got %v, want %v", err, db.ErrInvalid)
 	}
 	d.Close()
 	b, _ := os.ReadFile(name)
 	if got, want := string(b), "aaaabbbbcc      e   "; got != want {
 		t.Errorf("got %q, want %q", got, want)
-	}
-}
-
-func TestCursor(t *testing.T) {
-	d, err := New(nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i := 1; i <= 5; i++ {
-		d.Put(key(i), []byte{byte('0' + i)}, db.RNone)
-	}
-	k, v, err := d.Seq(key(3), db.RCursor)
-	if err != nil || string(v) != "3" || binary.NativeEndian.Uint32(k) != 3 {
-		t.Fatalf("seq cursor: %q %v", v, err)
-	}
-	if err := d.Del(nil, db.RCursor); err != nil {
-		t.Fatal(err)
-	}
-	if _, v, _ := d.Seq(nil, db.RNext); string(v) != "4" {
-		t.Errorf("got %q, want 4", v)
-	}
-	if _, v, _ := d.Seq(nil, db.RLast); string(v) != "5" {
-		t.Errorf("got %q, want 5", v)
-	}
-	if _, v, _ := d.Seq(nil, db.RPrev); string(v) != "4" {
-		t.Errorf("got %q, want 4", v)
 	}
 }
 
@@ -235,41 +208,16 @@ func TestLibc(t *testing.T) {
 	}
 }
 
-func TestPutKey(t *testing.T) {
-	d, err := New(nil, nil)
-	if err != nil {
+func TestPutNew(t *testing.T) {
+	d := fill(t, 3)
+	if err := d.PutNew(3, []byte("x")); !errors.Is(err, db.ErrKeyExist) {
+		t.Errorf("got %v, want %v", err, db.ErrKeyExist)
+	}
+	if err := d.PutNew(5, []byte("x")); err != nil {
 		t.Fatal(err)
 	}
-	for i := 1; i <= 3; i++ {
-		d.Put(key(i), []byte("x"), db.RNone)
-	}
-	testCases := []struct {
-		name string
-		key  int
-		flag db.Flag
-		want int
-	}{
-		{name: "iafter", key: 1, flag: db.RIAfter, want: 2},
-		{name: "ibefore", key: 2, flag: db.RIBefore, want: 2},
-		{name: "iafter0", key: 0, flag: db.RIAfter, want: 1},
-		{name: "skip", key: 9, flag: 0, want: 9},
-		{name: "setcursor", key: 4, flag: db.RSetCursor, want: 4},
-		{name: "cursor", key: 0, flag: db.RCursor, want: 4},
-	}
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			if tc.flag == db.RCursor {
-				// as in C, RSetCursor doesn't initialize the cursor
-				d.Seq(key(tc.want), db.RCursor)
-			}
-			k, err := d.Put(key(tc.key), []byte("y"), tc.flag)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got, want := int(binary.NativeEndian.Uint32(k)), tc.want; got != want {
-				t.Errorf("got %d, want %d", got, want)
-			}
-		})
+	if v, err := d.Get(4); err != nil || len(v) != 0 {
+		t.Errorf("get 4: got %q %v, want empty", v, err)
 	}
 }
 
@@ -325,14 +273,14 @@ func TestReadOnlyReader(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer d.Close()
-	got, err := d.Get(key(2), db.RNone)
+	got, err := d.Get(2)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if want := "b"; string(got) != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
-	if _, err := d.Put(key(3), []byte("c"), db.RNone); !errors.Is(err, db.ErrReadOnly) {
+	if err := d.Put(3, []byte("c")); !errors.Is(err, db.ErrReadOnly) {
 		t.Errorf("got %v, want %v", err, db.ErrReadOnly)
 	}
 }

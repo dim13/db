@@ -35,7 +35,7 @@ func FuzzOps(f *testing.F) {
 			data := bytes.Repeat([]byte{'a' + ops[i+2]%26}, size)
 			switch ops[i] % 5 {
 			case 0: // replace, filling a gap with empty records
-				if _, err := d.Put(key(n), data, db.RNone); err != nil {
+				if err := d.Put(n, data); err != nil {
 					t.Fatalf("op %d put %d: %v", i/3, n, err)
 				}
 				for len(m) < n {
@@ -46,7 +46,7 @@ func FuzzOps(f *testing.F) {
 				if n > len(m) {
 					continue
 				}
-				if _, err := d.Put(key(n), data, db.RIBefore); err != nil {
+				if err := d.InsertBefore(n, data); err != nil {
 					t.Fatalf("op %d insert before %d: %v", i/3, n, err)
 				}
 				m = slices.Insert(m, n-1, data)
@@ -54,12 +54,12 @@ func FuzzOps(f *testing.F) {
 				if n > len(m) {
 					continue
 				}
-				if _, err := d.Put(key(n), data, db.RIAfter); err != nil {
+				if err := d.InsertAfter(n, data); err != nil {
 					t.Fatalf("op %d insert after %d: %v", i/3, n, err)
 				}
 				m = slices.Insert(m, n, data)
 			case 3:
-				err := d.Del(key(n), db.RNone)
+				err := d.Delete(n)
 				if n > len(m) {
 					if !errors.Is(err, db.ErrNotFound) {
 						t.Fatalf("op %d del %d: got %v, want %v", i/3, n, err, db.ErrNotFound)
@@ -71,7 +71,7 @@ func FuzzOps(f *testing.F) {
 				}
 				m = slices.Delete(m, n-1, n)
 			case 4:
-				got, err := d.Get(key(n), db.RNone)
+				got, err := d.Get(n)
 				if n > len(m) {
 					if !errors.Is(err, db.ErrNotFound) {
 						t.Fatalf("op %d get %d: got %v, want %v", i/3, n, err, db.ErrNotFound)

@@ -2,14 +2,11 @@ package recno
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
-
-	"github.com/dim13/db"
 )
 
 func TestCacheLimit(t *testing.T) {
@@ -47,22 +44,24 @@ func TestCacheLimit(t *testing.T) {
 	}
 
 	// Reading the whole file is one operation.
-	if _, _, err := d.Seq(nil, db.RLast); err != nil {
-		t.Fatal(err)
+	c := d.Cursor()
+	if !c.Last() {
+		t.Fatal("last:", c.Err())
 	}
-	check("seq last")
+	c.Close()
+	check("last")
 	for i, rec := range want {
-		got, err := d.Get(key(i+1), db.RNone)
+		got, err := d.Get(i + 1)
 		if err != nil || !bytes.Equal(got, rec) {
 			t.Fatalf("get %d: %v", i+1, err)
 		}
 	}
 	check("get")
 
-	if err := d.Del(key(1), db.RNone); err != nil {
+	if err := d.Delete(1); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.Put(key(1), []byte("first"), db.RIBefore); err != nil {
+	if err := d.InsertBefore(1, []byte("first")); err != nil {
 		t.Fatal(err)
 	}
 	check("put")
@@ -126,7 +125,7 @@ func TestConcurrent(t *testing.T) {
 					for i := range n {
 						i = (i+r*n/4)%n + 1
 						want := fmt.Appendf(nil, "record %d %s", i, bytes.Repeat([]byte("x"), (i-1)%300))
-						got, err := d.Get(key(i), db.RNone)
+						got, err := d.Get(i)
 						if err != nil || !bytes.Equal(got, want) {
 							errc <- fmt.Errorf("reader %d get %d: %q %v", r, i, got, err)
 							return
@@ -138,12 +137,12 @@ func TestConcurrent(t *testing.T) {
 			for w := range 2 {
 				wg.Go(func() {
 					for i := range 500 {
-						if _, err := d.Put(key(n), fmt.Appendf(nil, "new %d %d", w, i), db.RIAfter); err != nil {
+						if err := d.InsertAfter(n, fmt.Appendf(nil, "new %d %d", w, i)); err != nil {
 							errc <- fmt.Errorf("writer %d put: %w", w, err)
 							return
 						}
 						if i%2 == 0 {
-							if err := d.Del(key(n+1), db.RNone); err != nil {
+							if err := d.Delete(n + 1); err != nil {
 								errc <- fmt.Errorf("writer %d del: %w", w, err)
 								return
 							}
@@ -152,15 +151,12 @@ func TestConcurrent(t *testing.T) {
 				})
 			}
 			wg.Go(func() {
-				for flag := db.RFirst; ; flag = db.RNext {
-					_, _, err := d.Seq(nil, flag)
-					if errors.Is(err, db.ErrNotFound) {
-						return
-					}
-					if err != nil {
-						errc <- fmt.Errorf("seq: %w", err)
-						return
-					}
+				c := d.Cursor()
+				defer c.Close()
+				for range c.All() {
+				}
+				if err := c.Err(); err != nil {
+					errc <- fmt.Errorf("cursor: %w", err)
 				}
 			})
 			wg.Wait()

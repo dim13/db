@@ -79,6 +79,43 @@ func (h hashDB) Seq(_ []byte, flag db.Flag) ([]byte, []byte, error) {
 	return h.c.Key(), h.c.Data(), nil
 }
 
+// recnoDB gives recno the db.DB flag API with 4-byte native-endian keys.
+type recnoDB struct {
+	*recno.DB
+	c *recno.Cursor
+}
+
+func num(k []byte) int {
+	if len(k) != 4 {
+		return 0
+	}
+	return int(binary.NativeEndian.Uint32(k))
+}
+
+func (r recnoDB) Put(k, v []byte, _ db.Flag) ([]byte, error) { return k, r.DB.Put(num(k), v) }
+func (r recnoDB) Get(k []byte, _ db.Flag) ([]byte, error)    { return r.DB.Get(num(k)) }
+func (r recnoDB) Del(k []byte, _ db.Flag) error              { return r.DB.Delete(num(k)) }
+func (r recnoDB) Sync(db.Flag) error                         { return r.DB.Sync() }
+
+func (r recnoDB) Seq(_ []byte, flag db.Flag) ([]byte, []byte, error) {
+	var ok bool
+	switch flag {
+	case db.RFirst:
+		ok = r.c.First()
+	case db.RNext:
+		ok = r.c.Next()
+	default:
+		return nil, nil, db.ErrInvalid
+	}
+	if !ok {
+		if err := r.c.Err(); err != nil {
+			return nil, nil, err
+		}
+		return nil, nil, db.ErrNotFound
+	}
+	return binary.NativeEndian.AppendUint32(nil, uint32(r.c.Num())), r.c.Data(), nil
+}
+
 func newHash(f *os.File, i *hash.Info) (db.DB, error) {
 	d, err := hash.New(f, i)
 	if err != nil {
@@ -103,7 +140,13 @@ func TestMk(t *testing.T) {
 	open := map[string]func(*os.File) (db.DB, error){
 		"btree": func(f *os.File) (db.DB, error) { return newBtree(f, nil) },
 		"hash":  func(f *os.File) (db.DB, error) { return newHash(f, nil) },
-		"recno": func(f *os.File) (db.DB, error) { return recno.New(f, nil) },
+		"recno": func(f *os.File) (db.DB, error) {
+			d, err := recno.New(f, nil)
+			if err != nil {
+				return nil, err
+			}
+			return recnoDB{DB: d, c: d.Cursor()}, nil
+		},
 		"btree512": func(f *os.File) (db.DB, error) {
 			return newBtree(f, &btree.Info{PageSize: 512})
 		},

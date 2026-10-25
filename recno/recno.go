@@ -1,14 +1,14 @@
 // Package recno implements the record number access method of Berkeley DB
 // 1.85: records of a flat text file addressed by their position.
 //
-// Keys are record numbers starting at 1, encoded as 4 bytes in native byte
-// order, see binary.NativeEndian.
+// Records are numbered from 1.
 package recno
 
 import (
 	"bufio"
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"io"
 	"io/fs"
 	"math"
@@ -16,21 +16,11 @@ import (
 	"github.com/dim13/db"
 )
 
-// Flag is an option of Info.Flags.
-type Flag uint
-
 // File is a flat file of records that can be written back.
 type File interface {
 	db.Storage
 	Truncate(size int64) error
 }
-
-// Info flags
-const (
-	RFixedLen Flag = 1 << iota // records of Info.RecordLen bytes
-	RNoKey                     // accepted, has no effect
-	RSnapshot                  // read the whole file in New
-)
 
 // search operations
 const (
@@ -39,21 +29,31 @@ const (
 	sSearch
 )
 
+// putMode selects how put stores a record.
+type putMode int
+
+const (
+	putReplace putMode = iota // replace or create the record
+	putNew                    // create the record, ErrKeyExist if it exists
+	putBefore                 // insert before the record
+	putAfter                  // insert after the record
+	putAppend                 // store after the last record
+)
+
 // Info holds options for New.  Zero fields and a nil Info select defaults.
 type Info struct {
-	Flags     Flag             // RFixedLen, RNoKey, RSnapshot
 	PageSize  int              // of a new btree file, default 4096
 	CacheSize int              // bytes of btree pages cached, default 1 MiB, at least 5 pages
 	ByteOrder binary.ByteOrder // byte order, nil for native
-	RecordLen int              // length of fixed-length records
+	RecordLen int              // > 0: records of this many bytes
 	Delimiter byte             // delimiter, newline if zero; pad byte of fixed-length records
+	Snapshot  bool             // read the whole flat file in New
 	BTree     db.Storage       // btree file, nil for in-memory tree
 	ReadOnly  bool             // refuse changes, never write
 }
 
-// DB is an open record number database, safe for concurrent use: Get calls run in
-// parallel, other methods one at a time; Seq has a single cursor shared
-// by all callers.
+// DB is an open record number database, safe for concurrent use: Get calls
+// run in parallel, other methods one at a time.
 type DB struct {
 	t *tree
 }
@@ -67,7 +67,7 @@ func New(r io.Reader, info *Info) (*DB, error) {
 	var psize, cache int
 	var order binary.ByteOrder
 	if info != nil {
-		if info.Flags&^(RFixedLen|RNoKey|RSnapshot) != 0 {
+		if info.RecordLen < 0 {
 			return nil, db.ErrInvalid
 		}
 		bfile = info.BTree
@@ -79,12 +79,9 @@ func New(r io.Reader, info *Info) (*DB, error) {
 	}
 
 	if info != nil {
-		if info.Flags&RFixedLen != 0 {
+		if info.RecordLen > 0 {
 			t.flags.Set(rFixLen)
 			t.reclen = info.RecordLen
-			if t.reclen <= 0 {
-				return nil, db.ErrInvalid
-			}
 		}
 		t.bval = info.Delimiter
 	}
@@ -135,20 +132,31 @@ func New(r io.Reader, info *Info) (*DB, error) {
 		t.dirty(h)
 	}
 
-	if info != nil && info.Flags&RSnapshot != 0 && t.flags.IsClr(rEOF|rInMem) {
-		if err := t.irec(math.MaxUint32); err != nil && err != db.ErrNotFound {
+	if info != nil && info.Snapshot {
+		if err := t.load(math.MaxUint32); err != nil {
 			return nil, err
 		}
 	}
 	return &DB{t: t}, nil
 }
 
-// keyNum decodes a native-endian 4-byte record number, or returns db.ErrInvalid.
-func keyNum(key []byte) (uint32, error) {
-	if len(key) != 4 {
+// num converts record number n, or returns db.ErrInvalid.
+func num(n int) (uint32, error) {
+	if n < 1 || n > math.MaxUint32 {
 		return 0, db.ErrInvalid
 	}
-	return binary.NativeEndian.Uint32(key), nil
+	return uint32(n), nil
+}
+
+// load reads source records up to n, if there are any left.
+func (t *tree) load(n uint32) error {
+	if n <= t.nrecs || t.flags.IsSet(rEOF|rInMem) {
+		return nil
+	}
+	if err := t.irec(n); err != nil && !errors.Is(err, db.ErrNotFound) {
+		return err
+	}
+	return nil
 }
 
 // Close writes changed records back to the flat file, which stays open
@@ -157,21 +165,18 @@ func (r *DB) Close() error {
 	t := r.t
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if err := r.sync(db.RNone); err != nil {
+	if err := r.sync(); err != nil {
 		return err
 	}
 	return t.close()
 }
 
-// Get returns the record numbered key, or ErrNotFound.
-func (r *DB) Get(key []byte, flag db.Flag) (data []byte, err error) {
+// Get returns record n, or ErrNotFound.
+func (r *DB) Get(n int) (data []byte, err error) {
 	t := r.t
-	nrec, err := keyNum(key)
+	nrec, err := num(n)
 	if err != nil {
 		return nil, err
-	}
-	if flag != db.RNone || nrec == 0 {
-		return nil, db.ErrInvalid
 	}
 
 	// Reading more of the flat file changes the tree, so it needs the
@@ -182,10 +187,8 @@ func (r *DB) Get(key []byte, flag db.Flag) (data []byte, err error) {
 	if more {
 		t.mu.Lock()
 		defer t.mu.Unlock()
-		if nrec > t.nrecs && t.flags.IsClr(rEOF|rInMem) {
-			if err := t.irec(nrec); err != nil {
-				return nil, err
-			}
+		if err := t.load(nrec); err != nil {
+			return nil, err
 		}
 	} else {
 		t.mu.RLock()
@@ -202,101 +205,107 @@ func (r *DB) Get(key []byte, flag db.Flag) (data []byte, err error) {
 	return t.record(e)
 }
 
-// Put stores data as record key and returns its record number.  Missing
-// records before key are created empty.  RIBefore and RIAfter insert
-// before or after record key, RSetCursor also moves the cursor there,
-// RCursor replaces the record at the cursor, and RNoOverwrite returns
-// ErrKeyExist for an existing record.
-func (r *DB) Put(key, data []byte, flag db.Flag) (rkey []byte, err error) {
+// Put stores data as record n.  Missing records before n are created
+// empty.
+func (r *DB) Put(n int, data []byte) error {
+	_, err := r.put(n, data, putReplace)
+	return err
+}
+
+// PutNew stores data as record n, or returns ErrKeyExist if it exists.
+func (r *DB) PutNew(n int, data []byte) error {
+	_, err := r.put(n, data, putNew)
+	return err
+}
+
+// Append stores data after the last record and returns its number.
+func (r *DB) Append(data []byte) (int, error) {
+	return r.put(0, data, putAppend)
+}
+
+// InsertBefore inserts data as record n, renumbering the records from n.
+func (r *DB) InsertBefore(n int, data []byte) error {
+	_, err := r.put(n, data, putBefore)
+	return err
+}
+
+// InsertAfter inserts data after record n, or at the front for n = 0 as in
+// C.
+func (r *DB) InsertAfter(n int, data []byte) error {
+	if n == 0 {
+		return r.InsertBefore(1, data)
+	}
+	_, err := r.put(n, data, putAfter)
+	return err
+}
+
+func (r *DB) put(n int, data []byte, mode putMode) (_ int, err error) {
 	t := r.t
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	defer t.done(&err)
 	if t.flags.IsSet(bRdOnly) {
-		return nil, db.ErrReadOnly
+		return 0, db.ErrReadOnly
 	}
 
 	// Fixed-length records are padded with bval; longer ones are rejected.
 	if t.flags.IsSet(rFixLen) && len(data) != t.reclen {
 		if len(data) > t.reclen {
-			return nil, db.ErrInvalid
+			return 0, db.ErrInvalid
 		}
 		data = append(bytes.Clone(data), bytes.Repeat([]byte{t.bval}, t.reclen-len(data))...)
 	}
 
 	var nrec uint32
-	switch flag {
-	case db.RCursor:
-		if t.cursor.flags.IsClr(cursInit) {
-			return nil, db.ErrInvalid
+	switch mode {
+	case putAppend:
+		if err := t.load(math.MaxUint32); err != nil {
+			return 0, err
 		}
-		nrec = t.cursor.rcursor
-	case db.RSetCursor, 0, db.RIBefore:
-		n, err := keyNum(key)
-		if err != nil || n == 0 {
-			return nil, db.ErrInvalid
+		if t.nrecs == math.MaxUint32 {
+			return 0, db.ErrInvalid
 		}
-		nrec = n
-	case db.RIAfter:
-		n, err := keyNum(key)
-		if err != nil {
-			return nil, err
-		}
-		if nrec = n; nrec == 0 {
-			nrec = 1
-			flag = db.RIBefore
-		}
-	case db.RNoOverwrite:
-		n, err := keyNum(key)
-		if err != nil || n == 0 {
-			return nil, db.ErrInvalid
-		}
-		if n <= t.nrecs {
-			return nil, db.ErrKeyExist
-		}
-		nrec = n
+		nrec = t.nrecs + 1
 	default:
-		return nil, db.ErrInvalid
-	}
-
-	// Load source records up to nrec, then fill any gap with empty ones.
-	if nrec > t.nrecs {
-		if t.flags.IsClr(rEOF | rInMem) {
-			if err := t.irec(nrec); err != nil && err != db.ErrNotFound {
-				return nil, err
-			}
+		if nrec, err = num(n); err != nil {
+			return 0, err
 		}
-		if nrec > t.nrecs+1 {
-			var empty []byte
-			if t.flags.IsSet(rFixLen) {
-				empty = bytes.Repeat([]byte{t.bval}, t.reclen)
-			}
-			for nrec > t.nrecs+1 {
-				if err := t.iput(t.nrecs, empty, 0); err != nil {
-					return nil, err
-				}
-			}
+		if err := t.load(nrec); err != nil {
+			return 0, err
+		}
+		if mode == putNew && nrec <= t.nrecs {
+			return 0, db.ErrKeyExist
 		}
 	}
 
-	if err := t.iput(nrec-1, data, flag); err != nil {
-		return nil, err
+	// Fill any gap before nrec with empty records; inserting after nrec
+	// needs nrec itself.
+	last := nrec - 1
+	if mode == putAfter {
+		last = nrec
 	}
-	if flag == db.RSetCursor {
-		t.cursor.rcursor = nrec
+	if last > t.nrecs {
+		var empty []byte
+		if t.flags.IsSet(rFixLen) {
+			empty = bytes.Repeat([]byte{t.bval}, t.reclen)
+		}
+		for last > t.nrecs {
+			if err := t.iput(t.nrecs, empty, putReplace); err != nil {
+				return 0, err
+			}
+		}
+	}
+
+	if err := t.iput(nrec-1, data, mode); err != nil {
+		return 0, err
 	}
 	t.flags.Set(rModified)
-	// The record inserted after nrec is nrec+1, as in libc (1.85 returns
-	// nrec).
-	if flag == db.RIAfter {
-		nrec++
-	}
-	return binary.NativeEndian.AppendUint32(nil, nrec), nil
+	return int(nrec), nil
 }
 
-// iput stores data at 0-based position nrec as flag directs, splitting
+// iput stores data at 0-based position nrec as mode directs, splitting
 // the leaf if it is full.
-func (t *tree) iput(nrec uint32, data []byte, flag db.Flag) error {
+func (t *tree) iput(nrec uint32, data []byte, mode putMode) error {
 	// Large records live in an overflow chain; the leaf keeps a reference.
 	var dflags byte
 	if len(data) > t.ovflsize {
@@ -308,7 +317,7 @@ func (t *tree) iput(nrec uint32, data []byte, flag db.Flag) error {
 	}
 
 	op := sSearch
-	if nrec > t.nrecs || flag == db.RIAfter || flag == db.RIBefore {
+	if nrec > t.nrecs || mode == putBefore || mode == putAfter {
 		op = sInsert
 	}
 	e, err := t.search(nrec, op)
@@ -317,12 +326,10 @@ func (t *tree) iput(nrec uint32, data []byte, flag db.Flag) error {
 	}
 	h, index := e.page, e.index
 
-	// RIAfter and RIBefore insert next to nrec; otherwise an existing
-	// record is replaced.
-	switch flag {
-	case db.RIAfter:
+	switch mode {
+	case putAfter:
 		index++
-	case db.RIBefore:
+	case putBefore:
 	default:
 		if nrec < t.nrecs {
 			if err := t.dleaf(h, index); err != nil {
@@ -351,43 +358,30 @@ func (t *tree) iput(nrec uint32, data []byte, flag db.Flag) error {
 	return nil
 }
 
-// Del deletes the record numbered key, or with RCursor the record at the
-// cursor, renumbering the records after it.
-func (r *DB) Del(key []byte, flag db.Flag) (err error) {
+// Delete deletes record n, renumbering the records after it.
+func (r *DB) Delete(n int) (err error) {
 	t := r.t
+	nrec, err := num(n)
+	if err != nil {
+		return err
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	defer t.done(&err)
 	if t.flags.IsSet(bRdOnly) {
 		return db.ErrReadOnly
 	}
-	switch flag {
-	case db.RNone:
-		nrec, kerr := keyNum(key)
-		if kerr != nil || nrec == 0 {
-			return db.ErrInvalid
-		}
-		if nrec > t.nrecs {
-			return db.ErrNotFound
-		}
-		err = t.rdelete(nrec - 1)
-	case db.RCursor:
-		if t.cursor.flags.IsClr(cursInit) {
-			return db.ErrInvalid
-		}
-		if t.nrecs == 0 {
-			return db.ErrNotFound
-		}
-		if err = t.rdelete(t.cursor.rcursor - 1); err == nil {
-			t.cursor.rcursor--
-		}
-	default:
-		return db.ErrInvalid
+	if err := t.load(nrec); err != nil {
+		return err
 	}
-	if err == nil {
-		t.flags.Set(bModified | rModified)
+	if nrec > t.nrecs {
+		return db.ErrNotFound
 	}
-	return err
+	if err := t.rdelete(nrec - 1); err != nil {
+		return err
+	}
+	t.flags.Set(bModified | rModified)
+	return nil
 }
 
 // rdelete removes 0-based record nrec, decrementing the parent counts.
@@ -485,91 +479,19 @@ func (t *tree) record(e epg) ([]byte, error) {
 	return bytes.Clone(rl.data), nil
 }
 
-// Seq returns the next record number and record, or ErrNotFound at the
-// end.  RFirst and RLast start at either end, RCursor at record key; RNext
-// and RPrev continue the scan.
-func (r *DB) Seq(key []byte, flag db.Flag) (rkey, data []byte, err error) {
-	t := r.t
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	defer t.done(&err)
-	var nrec uint32
-	switch flag {
-	case db.RCursor:
-		n, err := keyNum(key)
-		if err != nil || n == 0 {
-			return nil, nil, db.ErrInvalid
-		}
-		nrec = n
-	case db.RNext, db.RFirst:
-		nrec = 1
-		if flag == db.RNext && t.cursor.flags.IsSet(cursInit) {
-			nrec = t.cursor.rcursor + 1
-		}
-	case db.RPrev, db.RLast:
-		if flag == db.RPrev && t.cursor.flags.IsSet(cursInit) {
-			if nrec = t.cursor.rcursor - 1; nrec == 0 {
-				return nil, nil, db.ErrNotFound
-			}
-			break
-		}
-		if t.flags.IsClr(rEOF | rInMem) {
-			if err := t.irec(math.MaxUint32); err != nil && err != db.ErrNotFound {
-				return nil, nil, err
-			}
-		}
-		nrec = t.nrecs
-	default:
-		return nil, nil, db.ErrInvalid
-	}
-
-	if t.nrecs == 0 || nrec > t.nrecs {
-		if t.flags.IsClr(rEOF | rInMem) {
-			if err := t.irec(nrec); err != nil {
-				return nil, nil, err
-			}
-		}
-		if t.nrecs == 0 || nrec > t.nrecs {
-			return nil, nil, db.ErrNotFound
-		}
-	}
-
-	e, err := t.search(nrec-1, sSearch)
-	if err != nil {
-		return nil, nil, err
-	}
-	t.cursor.flags.Set(cursInit)
-	t.cursor.rcursor = nrec
-
-	data, err = t.record(*e)
-	if err != nil {
-		return nil, nil, err
-	}
-	return binary.NativeEndian.AppendUint32(nil, nrec), data, nil
-}
-
-// Sync writes the records back to the flat file.  With RRecnoSync it
-// syncs only the btree file.
-func (r *DB) Sync(flag db.Flag) error {
+// Sync writes the records back to the flat file and syncs the btree file.
+func (r *DB) Sync() error {
 	r.t.mu.Lock()
 	defer r.t.mu.Unlock()
-	return r.sync(flag)
+	return r.sync()
 }
 
 // sync implements Sync; the caller must hold the tree write lock.
-func (r *DB) sync(flag db.Flag) error {
-	t := r.t
-	switch flag {
-	case db.RNone:
-	case db.RRecnoSync:
-		return t.sync()
-	default:
-		return db.ErrInvalid
-	}
+func (r *DB) sync() error {
 	if err := r.syncFile(); err != nil {
 		return err
 	}
-	return t.sync()
+	return r.t.sync()
 }
 
 // syncFile reads in any remaining source records and rewrites and truncates
@@ -580,10 +502,8 @@ func (r *DB) syncFile() error {
 		return nil
 	}
 	// The file is rewritten from the tree, so load unread records first.
-	if t.flags.IsClr(rEOF) {
-		if err := t.irec(math.MaxUint32); err != nil && err != db.ErrNotFound {
-			return err
-		}
+	if err := t.load(math.MaxUint32); err != nil {
+		return err
 	}
 	w := bufio.NewWriter(io.NewOffsetWriter(t.rfile, 0))
 	var off int64
@@ -647,7 +567,7 @@ func (t *tree) irec(top uint32) error {
 		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
 			return err
 		}
-		if err := t.iput(t.nrecs, data, 0); err != nil {
+		if err := t.iput(t.nrecs, data, putReplace); err != nil {
 			return err
 		}
 		// Reading a large file is one operation, keep the cache bounded.

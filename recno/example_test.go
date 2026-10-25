@@ -1,19 +1,13 @@
 package recno_test
 
 import (
-	"encoding/binary"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 
-	"github.com/dim13/db"
 	"github.com/dim13/db/recno"
 )
-
-func key(n uint32) []byte {
-	return binary.NativeEndian.AppendUint32(nil, n)
-}
 
 func Example() {
 	name := filepath.Join(os.TempDir(), "example.txt")
@@ -32,20 +26,30 @@ func Example() {
 		log.Fatal(err)
 	}
 
-	v, _ := d.Get(key(2), db.RNone)
+	v, _ := d.Get(2)
 	fmt.Printf("%s\n", v)
 
-	d.Del(key(1), db.RNone)                   // "two" becomes record 1
-	d.Put(key(3), []byte("four"), db.RNone)   // append
-	d.Put(key(1), []byte("one"), db.RIBefore) // insert at the front
-	if err := d.Close(); err != nil {         // writes the file back
+	d.Delete(1)                      // "two" becomes record 1
+	d.Append([]byte("four"))         // record 3
+	d.InsertBefore(1, []byte("one")) // insert at the front
+
+	c := d.Cursor()
+	for n, v := range c.All() {
+		fmt.Println(n, string(v))
+	}
+	c.Close()
+
+	if err := d.Close(); err != nil { // writes the file back
 		log.Fatal(err)
 	}
-
 	b, _ := os.ReadFile(name)
 	fmt.Printf("%s", b)
 	// Output:
 	// two
+	// 1 one
+	// 2 two
+	// 3 three
+	// 4 four
 	// one
 	// two
 	// three
