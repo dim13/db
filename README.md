@@ -60,7 +60,8 @@ Recno is addressed by record number (`Get(n)`, `Put(n, data)`, `Append`,
 `InsertBefore`, `InsertAfter`).  Cursors are independent of each other,
 and offer `All` and `First`/`Next`-style stepping; btree and recno
 cursors also offer `Backward`, `From`, `Last`/`Prev` and `Seek`.
-A database is safe for concurrent use: `Get` calls run in parallel, other methods one at a time.
+A database is safe for concurrent use: `Get` calls run in parallel,
+other methods one at a time.
 
 `ndbm.Open(name, flag, perm)` opens `name.db` with `os.OpenFile` flags
 and returns a `*DBM`:
@@ -72,7 +73,7 @@ if err != nil {
 }
 defer d.Close()
 
-if err := d.Store([]byte("key"), []byte("value"), ndbm.Replace); err != nil {
+if err := d.Store([]byte("key"), []byte("value"), db.DBMReplace); err != nil {
 	log.Fatal(err)
 }
 for k, err := d.FirstKey(); err == nil; k, err = d.NextKey() {

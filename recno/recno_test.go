@@ -16,6 +16,8 @@ import (
 	"github.com/dim13/db/internal/dbtest"
 )
 
+var _ db.DB[int] = (*DB)(nil)
+
 // testDB adapts DB to dbtest.DB with 4-byte native-endian keys.
 type testDB struct{ *DB }
 

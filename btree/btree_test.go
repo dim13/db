@@ -12,6 +12,8 @@ import (
 	"github.com/dim13/db/internal/dbtest"
 )
 
+var _ db.DB[[]byte] = (*DB)(nil)
+
 // testDB adds Scan to DB for dbtest.
 type testDB struct{ *DB }
 

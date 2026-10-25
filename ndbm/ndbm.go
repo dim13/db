@@ -15,15 +15,6 @@ import (
 // Suffix is appended to the name given to Open, as in C.
 const Suffix = ".db"
 
-// Mode selects what Store does with an existing key.
-type Mode int
-
-// Store modes
-const (
-	Insert  Mode = iota // keep existing data, return db.ErrKeyExist
-	Replace             // overwrite existing data
-)
-
 // DBM is an open ndbm database, safe for concurrent use.  FirstKey and
 // NextKey share a single cursor.
 type DBM struct {
@@ -77,11 +68,11 @@ func (d *DBM) Fetch(key []byte) ([]byte, error) {
 	return d.h.Get(key)
 }
 
-// Store stores content under key.  With Insert an existing key is kept
+// Store stores content under key.  With db.DBMInsert an existing key is kept
 // and db.ErrKeyExist returned.
-func (d *DBM) Store(key, content []byte, mode Mode) error {
+func (d *DBM) Store(key, content []byte, mode db.Mode) error {
 	switch mode {
-	case Insert:
+	case db.DBMInsert:
 		return d.h.PutNew(key, content)
 	default:
 		return d.h.Put(key, content)
