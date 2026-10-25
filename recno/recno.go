@@ -166,10 +166,7 @@ func (t *tree) load(n uint32) error {
 // Close writes changed records back to the flat file, which stays open
 // like the btree file.
 func (r *DB) Close() error {
-	t := r.t
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return r.sync()
+	return r.Sync()
 }
 
 // Get returns record n, or ErrNotFound.

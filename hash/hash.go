@@ -284,9 +284,7 @@ func (h *DB) initHtab(nelem int) error {
 
 // Close syncs the table, the file stays open.
 func (h *DB) Close() error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.sync()
+	return h.Sync()
 }
 
 // Sync writes all changes to disk.

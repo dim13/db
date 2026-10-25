@@ -291,9 +291,7 @@ func (t *DB) pop() (epgno, bool) {
 
 // Close syncs the tree, the file stays open.
 func (t *DB) Close() error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.sync()
+	return t.Sync()
 }
 
 // done trims the page cache after an operation, keeping the first error.
