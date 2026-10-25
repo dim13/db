@@ -2,6 +2,7 @@ package btree
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"runtime"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dim13/db"
 	"github.com/dim13/db/internal/dbtest"
 )
 
@@ -96,20 +98,18 @@ func TestCursorsIndependent(t *testing.T) {
 	defer a.Close()
 	defer b.Close()
 	var ka, kb [][]byte
-	for {
-		oka := a.Next()
+	// b skips every third turn while a runs; a cursor that ran off the
+	// end would start over, so each stops there.
+	for oka, okb := true, true; oka || okb; {
 		if oka {
-			ka = append(ka, a.Key())
+			if oka = a.Next(); oka {
+				ka = append(ka, a.Key())
+			}
 		}
-		// b skips every third turn while a runs
-		var okb bool
-		if len(ka)%3 != 0 || !oka {
+		if okb && (len(ka)%3 != 0 || !oka) {
 			if okb = b.Next(); okb {
 				kb = append(kb, b.Key())
 			}
-		}
-		if !oka && !okb {
-			break
 		}
 	}
 	if err := a.Err(); err != nil {
@@ -371,4 +371,39 @@ func cursorRandom(seed uint64, dups, back bool) error {
 		}
 	}
 	return d.check()
+}
+
+// TestCursorEnd checks a failed move leaves the cursor unpositioned.
+func TestCursorEnd(t *testing.T) {
+	d, _ := New(nil, nil)
+	for _, k := range []string{"a", "b", "c"} {
+		d.Put([]byte(k), []byte(k))
+	}
+	c := d.Cursor()
+	defer c.Close()
+	if !c.Seek([]byte("a")) {
+		t.Fatal(c.Err())
+	}
+	if c.Seek([]byte("z")) || c.Err() != nil {
+		t.Fatalf("seek past end: %v", c.Err())
+	}
+	if err := c.Delete(); !errors.Is(err, db.ErrInvalid) {
+		t.Errorf("delete: got %v, want %v", err, db.ErrInvalid)
+	}
+	if err := c.Put([]byte("x")); !errors.Is(err, db.ErrInvalid) {
+		t.Errorf("put: got %v, want %v", err, db.ErrInvalid)
+	}
+	if got, _ := d.Get([]byte("a")); string(got) != "a" {
+		t.Errorf("got %q, want %q", got, "a")
+	}
+	for c.Next() {
+	}
+	if !c.Prev() || string(c.Key()) != "c" {
+		t.Errorf("prev after end: %q %v", c.Key(), c.Err())
+	}
+	for c.Prev() {
+	}
+	if !c.Next() || string(c.Key()) != "a" {
+		t.Errorf("next after start: %q %v", c.Key(), c.Err())
+	}
 }

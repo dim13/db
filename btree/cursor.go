@@ -11,8 +11,11 @@ import (
 
 // Cursor walks the tree in key order.  Entries are neither skipped nor
 // repeated when the tree changes between moves, through this or another
-// cursor or the DB methods.  A move returning false with a nil Err means
-// there are no more entries.  A Cursor is for use by one goroutine.
+// cursor or the DB methods; entries added during a scan may or may not
+// be seen.  A move returning false with a nil Err means there are no more
+// entries; the cursor is then unpositioned, so Next starts over at the
+// first entry and Prev at the last.  A Cursor is for use by one
+// goroutine.
 type Cursor struct {
 	t         *DB
 	c         *cursor // nil once closed
@@ -167,10 +170,13 @@ func (t *DB) move(c *cursor, f func(*cursor) (epg, error)) (key, data []byte, er
 	defer t.mu.Unlock()
 	defer t.done(&err)
 	e, err := f(c)
-	if err != nil {
-		return nil, nil, err
+	if err == nil {
+		key, data, err = t.ret(e, true, true)
 	}
-	if key, data, err = t.ret(e, true, true); err != nil {
+	if err != nil {
+		// A failed move leaves the cursor unpositioned.
+		c.flags.Clr(cursInit | cursAcquire | cursAfter | cursBefore)
+		c.key = nil
 		return nil, nil, err
 	}
 	c.pg = epgno{pgno: e.page.pgno(), index: e.index}
